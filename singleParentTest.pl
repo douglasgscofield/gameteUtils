@@ -17,8 +17,11 @@ my $o_sample1;
 my $o_sample2;
 my $o_mincov = 10;
 my $o_minalt = 2;
+my $o_allsites = 0;
+my $o_show_zerodiv = 1;
 
 my $n_homozygous = 0;
+my $o_max_p_val = 0.05;
 
 
 my $which_bams = "";
@@ -80,12 +83,16 @@ sub print_usage_and_exit($) {
 }
 
 GetOptions(
-    "1=s"         => \$o_sample1,
-    "2=s"         => \$o_sample2,
-    "mincov=i"    => \$o_mincov,
-    "minalt=i"    => \$o_minalt,
-    "fai=s"       => \$o_fai,
-    "help|?"      => \$o_help,
+    "1=s"              => \$o_sample1,
+    "2=s"              => \$o_sample2,
+    "mincov=i"         => \$o_mincov,
+    "minalt=i"         => \$o_minalt,
+    "allsites"         => \$o_allsites,
+    "show-zerodiv"     => sub { $o_show_zerodiv = 1 },
+    "no-show-zerodiv"  => sub { $o_show_zerodiv = 0 },
+    "fai=s"            => \$o_fai,
+    "max-p-val=f"      => \$o_max_p_val,
+    "help|?"           => \$o_help,
 ) or print_usage_and_exit("");
 
 print_usage_and_exit("") if $o_help;
@@ -111,23 +118,30 @@ sub read_line($) {
     return split /\t/, $l;
 }
 
+my @base = qw/ A C G T /;
+
 sub do_test($$) {
     my ($l1, $l2) = @_;
     die "inconsistent ref/pos" if $l1->[0] ne $l2->[0] or $l1->[1] != $l2->[1];
     my @d = ( [ $l1->[2], $l2->[2], $l1->[2] + $l2->[2], 0 ],   # A
-              [ $l1->[3], $l2->[3], $l1->[2] + $l2->[3], 1 ],   # C
+              [ $l1->[3], $l2->[3], $l1->[3] + $l2->[3], 1 ],   # C
               [ $l1->[4], $l2->[4], $l1->[4] + $l2->[4], 2 ],   # G
               [ $l1->[5], $l2->[5], $l1->[5] + $l2->[5], 3 ] ); # T
     @d = sort { $a->[2] <=> $b->[2] } @d;
     my $cov = $d[2]->[2] + $d[3]->[2];
-    return ($l1->[0], $l1->[1], ".", ".") if $cov < $o_mincov;  # insufficient coverage
-    return ($l1->[0], $l1->[1], "0", "-1") if $d[2]->[1] >= $o_minalt;  # there is an allele 3
-    return ($l1->[0], $l1->[1], "0", "1") if $d[2]->[2] < $o_minalt;  # homozygous site
+
+    my $o = "$base[$d[3]->[3]]/$base[$d[2]->[3]] : " .  # allele 1 / allele 2
+            "$d[3]->[0]/$d[2]->[0] , $d[3]->[1]/$d[2]->[1]";  # counts sample 2 , counts sample 2
+
+    return ($l1->[0], $l1->[1], $o, ".", ".") if $cov < $o_mincov;  # insufficient coverage
+    return ($l1->[0], $l1->[1], $o, "0", "-1") if $d[2]->[1] >= $o_minalt;  # there is an allele 3
+    return ($l1->[0], $l1->[1], $o, "0", "1") if $d[2]->[2] < $o_minalt;  # homozygous site
     # http://stackoverflow.com/questions/21204733/a-better-chi-square-test-for-perl
     # 
     # observed @o:
     # sample 1 low | sample 1 high
     # sample 2 low | sample 2 high
+
     my @o = ( [ $d[2]->[0], $d[3]->[0] ],
               [ $d[2]->[1], $d[3]->[1] ] );
     my @rowsum = ( $o[0]->[0] + $o[0]->[1],  # sample 1 low + sample 1 high
@@ -137,13 +151,21 @@ sub do_test($$) {
     # expected @e:
     my @e = ( [ $rowsum[0] * $colsum[0] / $cov, $rowsum[0] * $colsum[1] / $cov ],
               [ $rowsum[1] * $colsum[0] / $cov, $rowsum[1] * $colsum[1] / $cov ] );
+
+    return ($l1->[0], $l1->[1], $o, "-1", "-1") if $e[0]->[0] == 0 or
+                                                   $e[0]->[1] == 0 or
+                                                   $e[1]->[0] == 0 or
+                                                   $e[1]->[1] == 0;
+
     my $chi2 = ($o[0]->[0] - $e[0]->[0])**2 / $e[0]->[0] +
                ($o[0]->[1] - $e[0]->[1])**2 / $e[0]->[1] +
                ($o[1]->[0] - $e[1]->[0])**2 / $e[1]->[0] +
                ($o[1]->[1] - $e[1]->[1])**2 / $e[1]->[1];
     my $df = 1;
     my $prob = chisqrprob($df, $chi2);
-    return ($l1->[0], $l1->[1], $chi2, $prob);
+    $chi2 = sprintf("%.6f", $chi2);
+    $prob = sprintf("%.4f", $prob);
+    return ($l1->[0], $l1->[1], $o, $chi2, $prob);
  }
 
 my @l1 = read_line($s1);
@@ -154,9 +176,14 @@ while (@l1 and @l2) {
         if ($l1[1] == $l2[1]) { # same position
             # perform the TEST
             my @result = do_test(\@l1, \@l2); 
-            print STDOUT join("\t", @result), "\n";
             @l1 = read_line($s1);
             @l2 = read_line($s2);
+            if (not $o_allsites) {
+                next if $result[3] =~ m/^[\.0]$/;
+                next if $result[4] > $o_max_p_val;
+                next if $result[3] == -1 && $result[4] == -1 && ! $o_show_zerodiv;
+            }
+            print STDOUT join("\t", @result), "\n";
         } elsif ($l1[1] < $l2[1]) { # advance $l1
             @l1 = read_line($s1);
         } elsif ($l2[1] < $l1[1]) { # advance $l2
