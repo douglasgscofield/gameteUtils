@@ -1,1 +1,84 @@
-../bioinfo/scripts/mergePileupColumns
+#!/usr/bin/awk -f
+
+# Copyright (c) 2012, 2015 Douglas G. Scofield, Uppsala University
+# douglasgscofield@gmail.com
+#
+# No warranty is implied or assumed by this code.  Please send bugs, suggestions etc.
+#
+# Join mpileup columns into single columns when multiple BAMs were specified on the
+# samtools mpileup command line.  Correctly handles 0-coverage BAMs.  See 
+# https://github.com/douglasgscofield/bioinfo/tree/master/scripts#mergepileupcolumnsawk
+#
+# The below issue is fixed in samtools 1.0+, so check to see if the 4th column also
+# has '*'.
+#
+# Note that use of samtools mpileup flags --rf or --ff may result in 0-coverage
+# columns in mpileup output that might have 4 rather than always 3 columns.
+# The always-3-column output has '*' for both the 2nd and 3rd columns.
+
+BEGIN {
+    FS = "\t";
+    OFS = "\t";
+    n_bams = 0;
+}
+{
+    # $1 ref
+    # $2 cov
+    # $3 refbase
+    # $4+ coverage
+    cov=0;
+    base_call="";
+    base_qual="";
+    map_qual="";
+    i = 4;
+    n_bams_now = 0;
+    while (i <= NF) {  # walk through the columns
+        if ($(i) > 0) {  # there is coverage here, 3 or 4 columns to the right
+            cov += $(i);
+            base_call = base_call $(i+1);
+            base_qual = base_qual $(i+2);
+            if (mpileup_s) {
+                map_qual = map_qual $(i+3);
+                i += 4;
+            } else {
+                i += 3;
+            }
+        } else if ($(i) == 0 && $(i+1) == "*" && $(i+2) == "*") {
+            if ($($i+3) == "*") {
+                i += 4;
+            } else {
+                # pre-samtools 1.0, with no coverage at all, always 3 columns to the right: 0 * *
+                i += 3;
+            }
+        } else {
+            # no coverage because of filtering
+            if (mpileup_s) {
+                i += 4;
+            } else {
+                i += 3;
+            }
+        }
+        ++n_bams_now;
+    }
+    if (! n_bams) {
+        n_bams = n_bams_now;
+    }
+    if (! base_call) {  # we found no coverage at all
+        base_call = "*";
+        base_qual = "*";
+        map_qual = "*";  # not written unless mpileup_s nonzero
+    }
+
+    if (n_bams_now != n_bams) {
+        print "Expecting " n_bams " BAM files, line " NR " has pileup for " n_bams_now ", skipping line" > "/dev/stderr"
+        next;
+    }
+
+    if (mpileup_s) {
+        print $1, $2, $3, cov, base_call, base_qual, map_qual;
+    } else {
+        print $1, $2, $3, cov, base_call, base_qual;
+    }
+
+}
+
