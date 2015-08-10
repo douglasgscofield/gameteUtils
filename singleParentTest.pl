@@ -23,12 +23,7 @@ my $o_show_zerodiv = 1;
 my $n_homozygous = 0;
 my $o_max_p_val = 0.05;
 
-
-my $which_bams = "";
-my @which_bams = ();
-my $o_quiet;
 my $o_help;
-my $o_N;
 my $o_fai;
 my $current_reference = ""; # the name of the current reference sequence
 my $N_references = 0; # the number of reference sequences seen
@@ -45,16 +40,15 @@ SYNOPSIS
 
 OPTIONS
 
-    -                          read input from stdin, write to stdout
-    --in FILE                  read input from FILE, else from first non-argument
-                               on the command line or from stdin
-    --out FILE                 write output to FILE, else to stdout
-    --which-bams INT[,INT...]  produce profile output for the INT-th BAM(s) in 
-                               order as provided on the samtools mpileup command
-                               line, starting with 1; otherwise produce profile
-                               output for all BAMs 
-    --N                        include 5th count column for Ns
-    --quiet                    don't print progress to stderr
+    --1 FILE       sample 1 profile
+    --2 FILE       sample 2 profile
+    --mincov INT   minimum read coverage to consider a site
+    --minalt INT   minimum reads for alternate allele to consider a site
+    --allsites     show test result for all sites, not just those in each sample
+    --show-zerodiv     Whether to show sites that had zero division errors during testing
+    --no-show-zerodiv 
+    --fai FILE     fasta index file for reference
+    --max-p-val FLOAT  maximum P value to report
     --help, -?                 help message
 
   Profile2 format lists bases present at each position in a reference sequence,
@@ -66,12 +60,6 @@ OPTIONS
      contig_1	4	2	0	0	0
      contig_1	5	0	0	0	2
      contig_1	6	0	0	2	0
-
-  This script simply converts the format so any filtering on base or mapping 
-  quality, etc. that you may wish to do should be done when generating the pileup.
-  Pileup format created from multiple BAM files has 3 columns per BAM file; this
-  script will merge all columns while creating profile output up line unless the
-  --which-bam option is given.
 
 ";
 
