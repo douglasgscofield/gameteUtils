@@ -9,20 +9,20 @@ use Math::CDF qw(pbinom);
 use Exporter qw(import);
 our @EXPORT_OK = qw(binomial_test2);
 
-our %BT;
+our %BT2;
 
 sub binomial_test2($$) {
     my ($x, $n) = @_;
     # x  number of successes
     # n  number of trials
-    if (exists $BT{$n}{$x}) {
+    if (exists $BT2{$n}{$x}) {
         print STDERR "found [ $x, $n ]\n";
-        return $BT{$n}{$x};
+        return $BT2{$n}{$x};
     }
     $x = $n - $x if $x > $n / 2.0;  # reverse x
     my $prob = pbinom($x, $n, 0.5) * 2;
     $prob = 1 if $prob > 1;
-    $BT{$n}{$x} = $BT{$n}{$n - $x} = $prob;
+    $BT2{$n}{$x} = $BT2{$n}{$n - $x} = $prob;
     return $prob;
 }
 
