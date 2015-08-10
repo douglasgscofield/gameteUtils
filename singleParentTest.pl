@@ -7,6 +7,7 @@
 #
 use strict;
 use warnings;
+use BinomialTest qw/ binomial_test /;
 use POSIX qw/isdigit/;
 use Getopt::Long;
 use List::Util;
@@ -15,8 +16,12 @@ use Statistics::Distributions qw/ chisqrprob /;
 
 my $o_sample1;
 my $o_sample2;
+my $o_fai;
 my $o_mincov = 10;
+my $o_total_freq_test = 1;
+
 my $o_minalt = 2;
+
 my $o_allsites = 0;
 my $o_show_zerodiv = 1;
 
@@ -24,7 +29,6 @@ my $n_homozygous = 0;
 my $o_max_p_val = 0.05;
 
 my $o_help;
-my $o_fai;
 my $current_reference = ""; # the name of the current reference sequence
 my $N_references = 0; # the number of reference sequences seen
 my $N_coordinates = 0; # the total number of coordinates seen
@@ -32,34 +36,39 @@ my $N_coordinates = 0; # the total number of coordinates seen
 my $usage = "
 NAME
 
-  $0 - Convert pileup to profile2 format
+  $0 - test for differences in allele frequencies between 2 gamete pools from a single parent
+
 
 SYNOPSIS
 
-  samtools mpileup -B -C50 -q1 -f test.fa test.bam | pileup2pro2.pl > test_pro2.txt
+    singleParentTest.pl --fai reference.fa.fai --1 pool1.pro --2 pool2.pro 
+
 
 OPTIONS
 
-    --1 FILE       sample 1 profile
-    --2 FILE       sample 2 profile
-    --mincov INT   minimum read coverage to consider a site
-    --minalt INT   minimum reads for alternate allele to consider a site
-    --allsites     show test result for all sites, not just those in each sample
+    --1 FILE           Sample 1 profile
+    --2 FILE           Sample 2 profile
+    --fai FILE         Fasta index file for reference, required to specify the order of
+                       sequences in the profile files
+
+    --mincov INT       Minimum read coverage to consider a site
+
+    --total-freq-test  Test for deviation of total allele frequency (pool 1 plus pool 2) away
+                       from 1:1, using a two-sided binomial test with expected frequency 0.5.
+                       Only sites which do not pass this test (and thus have total ratio of
+                       1:1) will be given the differential frequency test via chi-squared.
+                       This test is performed by default.
+    --no-total-freq-test   Suppress the above test
+
+    --minalt INT       Minimum reads for alternate allele to consider a site.  This option
+                       is ignored unless --no-total-freq-test is set
+
+    --allsites         Show test result for all sites, not just those in each sample
+
     --show-zerodiv     Whether to show sites that had zero division errors during testing
     --no-show-zerodiv 
-    --fai FILE     fasta index file for reference
-    --max-p-val FLOAT  maximum P value to report
-    --help, -?                 help message
-
-  Profile2 format lists bases present at each position in a reference sequence,
-  with columns sequence, position, A, C, G, T:
-
-     contig_1	1	0	2	0	0
-     contig_1	2	2	0	0	0
-     contig_1	3	0	2	0	0
-     contig_1	4	2	0	0	0
-     contig_1	5	0	0	0	2
-     contig_1	6	0	0	2	0
+    --max-p-val FLOAT  Maximum P value to report
+    --help, -?         Help message
 
 ";
 
@@ -71,29 +80,31 @@ sub print_usage_and_exit($) {
 }
 
 GetOptions(
-    "1=s"              => \$o_sample1,
-    "2=s"              => \$o_sample2,
-    "mincov=i"         => \$o_mincov,
-    "minalt=i"         => \$o_minalt,
-    "allsites"         => \$o_allsites,
-    "show-zerodiv"     => sub { $o_show_zerodiv = 1 },
-    "no-show-zerodiv"  => sub { $o_show_zerodiv = 0 },
-    "fai=s"            => \$o_fai,
-    "max-p-val=f"      => \$o_max_p_val,
-    "help|?"           => \$o_help,
+    "1=s"                 => \$o_sample1,
+    "2=s"                 => \$o_sample2,
+    "fai=s"               => \$o_fai,
+    "total-freq-test"     => sub { $o_total_freq_test = 1 },
+    "no-total-freq-test"  => sub { $o_total_freq_test = 0 },
+    "mincov=i"            => \$o_mincov,
+    "minalt=i"            => \$o_minalt,
+    "allsites"            => \$o_allsites,
+    "show-zerodiv"        => sub { $o_show_zerodiv = 1 },
+    "no-show-zerodiv"     => sub { $o_show_zerodiv = 0 },
+    "max-p-val=f"         => \$o_max_p_val,
+    "help|?"              => \$o_help,
 ) or print_usage_and_exit("");
 
 print_usage_and_exit("") if $o_help;
 
 # fill reference sequence order hash from fai file
-my %ref_order;
+my %REF_ORDER;
 my $ref_index = 0;
 open (my $ref, "<", $o_fai) or die "cannot open Fasta index file '$o_fai': $!";
 while (<$ref>) {
     my @l = split /\t/;
-    $ref_order{$l[0]} = ++$ref_index if not exists $ref_order{$l[0]};
+    $REF_ORDER{$l[0]} = ++$ref_index if not exists $REF_ORDER{$l[0]};
 }
-print STDERR "Found ".scalar(keys(%ref_order))." reference sequences in $o_fai\n";
+print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai\n";
 
 open (my $s1, "<", $o_sample1) or die "cannot open sample 1 profile '$o_sample1': $!";
 open (my $s2, "<", $o_sample2) or die "cannot open sample 2 profile '$o_sample2': $!";
@@ -179,9 +190,9 @@ while (@l1 and @l2) {
         } else {
             die "unknown condition involving positions";
         }
-    } elsif ($ref_order{$l1[0]} < $ref_order{$l2[0]}) { # advance $l1
+    } elsif ($REF_ORDER{$l1[0]} < $REF_ORDER{$l2[0]}) { # advance $l1
         @l1 = read_line($s1);
-    } elsif ($ref_order{$l2[0]} < $ref_order{$l1[0]}) { # advance $l2
+    } elsif ($REF_ORDER{$l2[0]} < $REF_ORDER{$l1[0]}) { # advance $l2
         @l2 = read_line($s2);
     } else {
         die "unknown condition involving reference order";
