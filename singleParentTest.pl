@@ -17,10 +17,14 @@ use Statistics::Distributions qw/ chisqrprob /;
 my $o_sample1;
 my $o_sample2;
 my $o_fai;
-my $o_mincov = 10;
 my $o_total_freq_test = 1;
-
+my $o_total_freq_prob = 0.10;
+my $o_mincov = 6; # 10
 my $o_minalt = 2;
+my $o_max_allele_3 = 0.1;
+
+my $o_pool_freq_prob = 0.10;
+my $o_pool_test_type = "binom";
 
 my $o_allsites = 0;
 my $o_show_zerodiv = 1;
@@ -46,29 +50,51 @@ SYNOPSIS
 
 OPTIONS
 
-    --1 FILE           Sample 1 profile
-    --2 FILE           Sample 2 profile
-    --fai FILE         Fasta index file for reference, required to specify the order of
-                       sequences in the profile files
+    --1 FILE                Sample 1 profile
+    --2 FILE                Sample 2 profile
+    --fai FILE              Fasta index file for reference, required to specify the order of
+                            sequences in the profile files
 
-    --mincov INT       Minimum read coverage to consider a site
+  SITE ELIGIBILITY
 
-    --total-freq-test  Test for deviation of total allele frequency (pool 1 plus pool 2) away
-                       from 1:1, using a two-sided binomial test with expected frequency 0.5.
-                       Only sites which do not pass this test (and thus have total ratio of
-                       1:1) will be given the differential frequency test via chi-squared.
-                       This test is performed by default.
-    --no-total-freq-test   Suppress the above test
+    --total-freq-test       Test for deviation of total allele frequency (pool 1 plus pool 2) away
+                            from 1:1, using a two-sided binomial test with expected frequency 0.5.
+                            Only sites which fail this test (and thus have total ratio of
+                            1:1) will be given the differential frequency test via chi-squared.
+                            This test is performed by default.
+    --total-freq-prob FLOAT Probability threshold to consider a site violating 1:1; a site with
+                            total frequency test above this threshold is accepted for testing
+                            [default $o_total_freq_prob]
+    --no-total-freq-test    Suppress the above test
+    --mincov INT            Minimum read coverage to consider a site [default $o_mincov]
+    --max-allele-3 FLOAT    Maximum accepted frequency count for a 3rd allele [default $o_max_allele_3]
 
-    --minalt INT       Minimum reads for alternate allele to consider a site.  This option
-                       is ignored unless --no-total-freq-test is set
+    An alternative means of determining site eligibility depends on specifying some filter limits
+    based on coverage.  It seems as if the above test will be better in all circumstances, but
+    perhaps that will not hold up.  The two options below are ignored unless --no-total-freq-test
+    is specified.
 
-    --allsites         Show test result for all sites, not just those in each sample
+    --minalt INT            Minimum reads for alternate allele to consider a site
 
-    --show-zerodiv     Whether to show sites that had zero division errors during testing
+  ALLELE FREQUENCY TESTS
+
+    --pool-test-type STRING Type of test for pool frequencies: chisq or binom [default $o_pool_test_type]
+
+    --pool-freq-prob FLOAT  Probability threshold below which a pool is considered to violate 1:1
+                            [default $o_pool_freq_prob]
+    --two-pool-test         Both pools must pass the pool frequency probability test, and must
+                            pass it with opposite allele frequencies, e.g. 2,15 and 14,3
+    --single-pool-test      Just one of the pools pools must pass the pool frequency probability test
+
+    --max-p-val FLOAT       Maximum P value to report
+
+  OTHER OPTIONS
+
+    --allsites              Show test result for all sites, not just those in each sample
+    --show-zerodiv          Whether to show sites that had zero division errors during testing
     --no-show-zerodiv 
-    --max-p-val FLOAT  Maximum P value to report
-    --help, -?         Help message
+
+    --help, -?              Help message
 
 ";
 
@@ -119,21 +145,75 @@ sub read_line($) {
 
 my @base = qw/ A C G T /;
 
-sub do_test($$) {
+sub sorted_total_counts($$) {
     my ($l1, $l2) = @_;
     die "inconsistent ref/pos" if $l1->[0] ne $l2->[0] or $l1->[1] != $l2->[1];
     my @d = ( [ $l1->[2], $l2->[2], $l1->[2] + $l2->[2], 0 ],   # A
               [ $l1->[3], $l2->[3], $l1->[3] + $l2->[3], 1 ],   # C
               [ $l1->[4], $l2->[4], $l1->[4] + $l2->[4], 2 ],   # G
               [ $l1->[5], $l2->[5], $l1->[5] + $l2->[5], 3 ] ); # T
-    @d = sort { $a->[2] <=> $b->[2] } @d;
+    return sort { $a->[2] <=> $b->[2] } @d;
+}
+
+# for binom, output is:
+# 0: reference
+# 1: position
+# 2: test description string
+# 3: total frequency probability
+# both 4 and 5 are "." if 3 indicates not 1:1 allele ratio
+# 4: two-pool test P value: pool 1 P * pool 2 P, "." if either pool's P > $o_pool_freq_prob
+# 5: one-pool test P value: pool 1 P * pool 2 P, "." if both pools' P <= $o_pool_freq_prob
+sub do_binom_test($$) {
+    my ($l1, $l2) = @_;
+    my @d = sorted_total_counts($l1, $l2);
     my $cov = $d[2]->[2] + $d[3]->[2];
 
-    my $o = "$base[$d[3]->[3]]/$base[$d[2]->[3]] : " .  # allele 1 / allele 2
-            "$d[3]->[0]/$d[2]->[0] , $d[3]->[1]/$d[2]->[1]";  # counts sample 2 , counts sample 2
+    my $o = "$base[$d[3]->[3]]/$base[$d[2]->[3]] " .  # allele 1 / allele 2
+            "binom $d[3]->[0]/$d[2]->[0] $d[3]->[1]/$d[2]->[1]";  # counts sample 1 , counts sample 2
+
+    return ($l1->[0], $l1->[1], $o, ".", ".", ".") if $cov < $o_mincov;  # insufficient coverage
+
+    my $totprob = binomial_test($d[2]->[2], $cov);
+
+    if ($totprob < $o_total_freq_prob) {  # effectively homozygous site
+        return ($l1->[0], $l1->[1], $o, sprintf("%.3f", $totprob), ".", ".");
+    }
+
+    $totprob = sprintf("%.3f", $totprob);
+
+    if ($d[1]->[2] >= $cov * $o_max_allele_3) {  # if coverage of allele 3 too high
+        return ($l1->[0], $l1->[1], $o, $totprob, "-1", "-1");
+    }
+
+    my $pool1cov = $d[2]->[0] + $d[3]->[0];
+    my $pool2cov = $d[2]->[1] + $d[3]->[1];
+    my $pool1prob = binomial_test($d[2]->[0], $pool1cov);
+    my $pool2prob = binomial_test($d[2]->[1], $pool2cov);
+    my ($twopoolprob, $onepoolprob) = sprintf("%.8f", $pool1prob * $pool2prob) x 2;
+
+    # now check to see if we can perform a two-pool test
+    if ($d[2]->[0] == $d[3]->[0] or # equal counts
+        (($d[2]->[0] <=> $d[3]->[0]) + ($d[2]->[1] <=> $d[3]->[1])) != 0) { # not opposite "signs"
+        if ($pool1prob > $o_pool_freq_prob or $pool2prob > $o_pool_freq_prob) {
+            $twopoolprob = ".";
+        }
+    }
+    if ($pool1prob > $o_pool_freq_prob and $pool2prob > $o_pool_freq_prob) {
+        $onepoolprob = ".";
+    }
+    return ($l1->[0], $l1->[1], $o, $totprob, $twopoolprob, $onepoolprob);
+}
+
+sub do_chisq_test($$) {
+    my ($l1, $l2) = @_;
+    my @d = sorted_total_counts($l1, $l2);
+    my $cov = $d[2]->[2] + $d[3]->[2];
+
+    my $o = "$base[$d[3]->[3]]/$base[$d[2]->[3]] " .  # allele 1 / allele 2
+            "chisq $d[3]->[0]/$d[2]->[0] , $d[3]->[1]/$d[2]->[1]";  # counts sample 2 , counts sample 2
 
     return ($l1->[0], $l1->[1], $o, ".", ".") if $cov < $o_mincov;  # insufficient coverage
-    return ($l1->[0], $l1->[1], $o, "0", "-1") if $d[2]->[1] >= $o_minalt;  # there is an allele 3
+    return ($l1->[0], $l1->[1], $o, "0", "-1") if $d[1]->[2] >= $cov * $o_max_allele_3;  # there is an allele 3
     return ($l1->[0], $l1->[1], $o, "0", "1") if $d[2]->[2] < $o_minalt;  # homozygous site
     # http://stackoverflow.com/questions/21204733/a-better-chi-square-test-for-perl
     # 
@@ -165,7 +245,7 @@ sub do_test($$) {
     $chi2 = sprintf("%.6f", $chi2);
     $prob = sprintf("%.4f", $prob);
     return ($l1->[0], $l1->[1], $o, $chi2, $prob);
- }
+}
 
 my @l1 = read_line($s1);
 my @l2 = read_line($s2);
@@ -173,8 +253,19 @@ my @l2 = read_line($s2);
 while (@l1 and @l2) {
     if ($l1[0] eq $l2[0]) { # same reference
         if ($l1[1] == $l2[1]) { # same position
-            # perform the TEST
-            my @result = do_test(\@l1, \@l2); 
+            # test result is
+            # 0: reference
+            # 1: position
+            # 2: test description string
+            # 3: test statistic
+            # 4: probability
+            my @result;
+            if ($o_pool_test_type eq 'binom') {
+                @result = do_binom_test(\@l1, \@l2); 
+            } elsif ($o_pool_test_type eq 'chisq') {
+                @result = do_chisq_test(\@l1, \@l2); 
+            } else {
+            }
             @l1 = read_line($s1);
             @l2 = read_line($s2);
             if (not $o_allsites) {
