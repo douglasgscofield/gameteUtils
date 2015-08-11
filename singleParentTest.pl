@@ -7,12 +7,14 @@
 #
 use strict;
 use warnings;
-use BinomialTest qw/ binomial_test /;
 use POSIX qw/isdigit/;
 use Getopt::Long;
 use List::Util;
 # http://stackoverflow.com/questions/21204733/a-better-chi-square-test-for-perl
 use Statistics::Distributions qw/ chisqrprob /;
+use FindBin;
+use lib $FindBin::Bin;  # add script directory to @INC to find BinomialTest
+use BinomialTest qw/ binomial_test /;
 
 my $o_sample1;
 my $o_sample2;
