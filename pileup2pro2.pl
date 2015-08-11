@@ -59,6 +59,7 @@ my @base_quality_columns;
 my $which_bams = "";
 my @which_bams = ();
 my $o_stdio;
+my $o_report = 1000000;
 my $o_quiet;
 my $o_help;
 my $o_N;
@@ -86,6 +87,7 @@ OPTIONS
                                line, starting with 1; otherwise produce profile
                                output for all BAMs 
     --N                        include 5th count column for Ns
+    --report INT               report progress every INT positions [default $o_report]
     --quiet                    don't print progress to stderr
     --help, -?                 help message
 
@@ -204,7 +206,7 @@ while (<IN>) {
     print OUT $fields[0] . "\t" . $fields[1] . "\t" .
               $SNPs{A} . "\t" . $SNPs{C} . "\t" . $SNPs{G} . "\t" .  $SNPs{T} . ($o_N ? ("\t".$SNPs{N}) : "") . "\n";
 
-    print STDERR "seen $N_coordinates positions across $N_references reference sequences\n" if ! ($N_coordinates % 10000) and ! $o_quiet;
+    print STDERR "seen $N_coordinates positions across $N_references reference sequences\n" if ! ($N_coordinates % $o_report) and ! $o_quiet;
 }
 
 close IN;

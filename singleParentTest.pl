@@ -84,11 +84,8 @@ OPTIONS
 
     --pool-freq-prob FLOAT  Probability threshold below which a pool is considered to violate 1:1
                             [default $o_pool_freq_prob]
-    --two-pool-test         Both pools must pass the pool frequency probability test, and must
-                            pass it with opposite allele frequencies, e.g. 2,15 and 14,3
-    --single-pool-test      Just one of the pools pools must pass the pool frequency probability test
 
-    --max-p-val FLOAT       Maximum P value to report
+    --max-p-val FLOAT       Maximum P value to report, ignored for 'binom'
 
   OTHER OPTIONS
 
@@ -113,8 +110,12 @@ GetOptions(
     "fai=s"               => \$o_fai,
     "total-freq-test"     => sub { $o_total_freq_test = 1 },
     "no-total-freq-test"  => sub { $o_total_freq_test = 0 },
+    "total-freq-prob=f"   => \$o_total_freq_prob,
     "mincov=i"            => \$o_mincov,
+    "max-allele-3=f"      => \$o_max_allele_3,
     "minalt=i"            => \$o_minalt,
+    "pool-test-type=s"    => \$o_pool_test_type,
+    "pool-test-prob=f"    => \$o_pool_freq_prob,
     "allsites"            => \$o_allsites,
     "show-zerodiv"        => sub { $o_show_zerodiv = 1 },
     "no-show-zerodiv"     => sub { $o_show_zerodiv = 0 },
@@ -122,7 +123,7 @@ GetOptions(
     "help|?"              => \$o_help,
 ) or print_usage_and_exit("");
 
-print_usage_and_exit("") if $o_help;
+print_usage_and_exit("") if $o_help or not $o_sample1 or not $o_sample2;
 
 # fill reference sequence order hash from fai file
 my %REF_ORDER;
@@ -175,13 +176,11 @@ sub do_binom_test($$) {
 
     return ($l1->[0], $l1->[1], $o, ".", ".", ".") if $cov < $o_mincov;  # insufficient coverage
 
-    my $totprob = binomial_test($d[2]->[2], $cov);
+    my $totprob = sprintf("%.3f", binomial_test($d[2]->[2], $cov));
 
     if ($totprob < $o_total_freq_prob) {  # effectively homozygous site
-        return ($l1->[0], $l1->[1], $o, sprintf("%.3f", $totprob), ".", ".");
+        return ($l1->[0], $l1->[1], $o, $totprob, ".", ".");
     }
-
-    $totprob = sprintf("%.3f", $totprob);
 
     if ($d[1]->[2] >= $cov * $o_max_allele_3) {  # if coverage of allele 3 too high
         return ($l1->[0], $l1->[1], $o, $totprob, "-1", "-1");
@@ -191,7 +190,7 @@ sub do_binom_test($$) {
     my $pool2cov = $d[2]->[1] + $d[3]->[1];
     my $pool1prob = binomial_test($d[2]->[0], $pool1cov);
     my $pool2prob = binomial_test($d[2]->[1], $pool2cov);
-    my ($twopoolprob, $onepoolprob) = sprintf("%.8f", $pool1prob * $pool2prob) x 2;
+    my ($twopoolprob, $onepoolprob) = sprintf("%.5f", $pool1prob * $pool2prob) x 2;
 
     # now check to see if we can perform a two-pool test
     if ($d[2]->[0] == $d[3]->[0] or # equal counts
@@ -206,6 +205,12 @@ sub do_binom_test($$) {
     return ($l1->[0], $l1->[1], $o, $totprob, $twopoolprob, $onepoolprob);
 }
 
+# for chisq, result is:
+# 0: reference
+# 1: position
+# 2: test description string
+# 3: test statistic
+# 4: probability
 sub do_chisq_test($$) {
     my ($l1, $l2) = @_;
     my @d = sorted_total_counts($l1, $l2);
@@ -255,25 +260,26 @@ my @l2 = read_line($s2);
 while (@l1 and @l2) {
     if ($l1[0] eq $l2[0]) { # same reference
         if ($l1[1] == $l2[1]) { # same position
-            # test result is
-            # 0: reference
-            # 1: position
-            # 2: test description string
-            # 3: test statistic
-            # 4: probability
             my @result;
             if ($o_pool_test_type eq 'binom') {
                 @result = do_binom_test(\@l1, \@l2); 
+                @l1 = read_line($s1);
+                @l2 = read_line($s2);
+                if (not $o_allsites) {
+                    next if $result[3] < $o_total_freq_prob;
+                    next if $result[4] == -1;
+                }
             } elsif ($o_pool_test_type eq 'chisq') {
                 @result = do_chisq_test(\@l1, \@l2); 
+                @l1 = read_line($s1);
+                @l2 = read_line($s2);
+                if (not $o_allsites) {
+                    next if $result[3] =~ m/^[\.0]$/;
+                    next if $result[4] > $o_max_p_val;
+                    next if $result[3] == -1 && $result[4] == -1 && ! $o_show_zerodiv;
+                }
             } else {
-            }
-            @l1 = read_line($s1);
-            @l2 = read_line($s2);
-            if (not $o_allsites) {
-                next if $result[3] =~ m/^[\.0]$/;
-                next if $result[4] > $o_max_p_val;
-                next if $result[3] == -1 && $result[4] == -1 && ! $o_show_zerodiv;
+                die "unknown test type $o_pool_test_type";
             }
             print STDOUT join("\t", @result), "\n";
         } elsif ($l1[1] < $l2[1]) { # advance $l1
