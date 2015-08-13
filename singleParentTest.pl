@@ -20,8 +20,8 @@ my $o_sample1;
 my $o_sample2;
 my $o_fai;
 my $o_total_freq_test = 1;
-my $o_total_freq_prob = 0.10;
-my $o_mincov = 6; # 10
+my $o_total_freq_prob = 0.01;
+my $o_mincov = 16; # 10
 my $o_minalt = 2;
 my $o_max_allele_3 = 0.1;
 
@@ -171,38 +171,46 @@ sub do_binom_test($$) {
     my @d = sorted_total_counts($l1, $l2);
     my $cov = $d[2]->[2] + $d[3]->[2];
 
-    my $o = "$base[$d[3]->[3]]/$base[$d[2]->[3]] " .  # allele 1 / allele 2
-            "binom $d[3]->[0]/$d[2]->[0] $d[3]->[1]/$d[2]->[1]";  # counts sample 1 , counts sample 2
+    my $otot = "binom $base[$d[3]->[3]]/$base[$d[2]->[3]]:$d[3]->[2]/$d[2]->[2]";
 
-    return ($l1->[0], $l1->[1], $o, ".", ".", ".") if $cov < $o_mincov;  # insufficient coverage
+    return ($l1->[0], $l1->[1], $otot, ".", ".", ".", ".") if $cov < $o_mincov;  # insufficient coverage
 
     my $totprob = sprintf("%.3f", binomial_test($d[2]->[2], $cov));
 
     if ($totprob < $o_total_freq_prob) {  # effectively homozygous site
-        return ($l1->[0], $l1->[1], $o, $totprob, ".", ".");
+        return ($l1->[0], $l1->[1], $otot, $totprob, ".", ".", ".");
     }
 
     if ($d[1]->[2] >= $cov * $o_max_allele_3) {  # if coverage of allele 3 too high
-        return ($l1->[0], $l1->[1], $o, $totprob, "-1", "-1");
+        return ($l1->[0], $l1->[1], $otot, $totprob, "-1", "-1", "-1");
     }
 
-    my $pool1cov = $d[2]->[0] + $d[3]->[0];
-    my $pool2cov = $d[2]->[1] + $d[3]->[1];
+    my $opool1 = "$d[3]->[0]/$d[2]->[0]";  # counts sample 1
+    my $opool2 = "$d[3]->[1]/$d[2]->[1]";  # counts sample 2
+
+    my $pool1cov = $d[3]->[0] + $d[2]->[0];
+    my $pool2cov = $d[3]->[1] + $d[2]->[1];
     my $pool1prob = binomial_test($d[2]->[0], $pool1cov);
     my $pool2prob = binomial_test($d[2]->[1], $pool2cov);
-    my ($twopoolprob, $onepoolprob) = sprintf("%.5f", $pool1prob * $pool2prob) x 2;
+    $opool1 = "$opool1:" . sprintf("%.3f", $pool1prob);
+    $opool2 = "$opool2:" . sprintf("%.3f", $pool2prob);
+    my $twopoolprob = sprintf("%.5f", $pool1prob * $pool2prob);
+    my $onepoolprob = $twopoolprob;
 
     # now check to see if we can perform a two-pool test
-    if ($d[2]->[0] == $d[3]->[0] or # equal counts
-        (($d[2]->[0] <=> $d[3]->[0]) + ($d[2]->[1] <=> $d[3]->[1])) != 0) { # not opposite "signs"
-        if ($pool1prob > $o_pool_freq_prob or $pool2prob > $o_pool_freq_prob) {
-            $twopoolprob = ".";
-        }
+    my $counts1 = $d[3]->[0] <=> $d[2]->[0];  # -1 of 3 < 2, 0 if 3 == 3, 1 if 3 > 2
+    my $counts2 = $d[3]->[1] <=> $d[2]->[1];
+    # for a two-pool test, the counts must differ and be of opposite sign and the 
+    # test probability must be significant for both
+    if (! $counts1 or ! $counts2 or $counts1 + $counts2 != 0 or
+        $pool1prob > $o_pool_freq_prob or $pool2prob > $o_pool_freq_prob) {
+        $twopoolprob = ".";
     }
-    if ($pool1prob > $o_pool_freq_prob and $pool2prob > $o_pool_freq_prob) {
+    # for a one-pool test, one must pass and one must fail
+    if (not $pool1prob > $o_pool_freq_prob xor $pool2prob > $o_pool_freq_prob) {
         $onepoolprob = ".";
     }
-    return ($l1->[0], $l1->[1], $o, $totprob, $twopoolprob, $onepoolprob);
+    return ($l1->[0], $l1->[1], $otot, $totprob, "$opool1,$opool2", $twopoolprob, $onepoolprob);
 }
 
 # for chisq, result is:
@@ -220,7 +228,7 @@ sub do_chisq_test($$) {
             "chisq $d[3]->[0]/$d[2]->[0] , $d[3]->[1]/$d[2]->[1]";  # counts sample 2 , counts sample 2
 
     return ($l1->[0], $l1->[1], $o, ".", ".") if $cov < $o_mincov;  # insufficient coverage
-    return ($l1->[0], $l1->[1], $o, "0", "-1") if $d[1]->[2] >= $cov * $o_max_allele_3;  # there is an allele 3
+    return ($l1->[0], $l1->[1], $o, "-1", "-1") if $d[1]->[2] >= $cov * $o_max_allele_3;  # there is an allele 3
     return ($l1->[0], $l1->[1], $o, "0", "1") if $d[2]->[2] < $o_minalt;  # homozygous site
     # http://stackoverflow.com/questions/21204733/a-better-chi-square-test-for-perl
     # 
@@ -254,6 +262,8 @@ sub do_chisq_test($$) {
     return ($l1->[0], $l1->[1], $o, $chi2, $prob);
 }
 
+print STDERR "Starting single parent test with '$o_sample1' and '$o_sample2'\n";
+
 my @l1 = read_line($s1);
 my @l2 = read_line($s2);
 
@@ -262,14 +272,17 @@ while (@l1 and @l2) {
         if ($l1[1] == $l2[1]) { # same position
             my @result;
             if ($o_pool_test_type eq 'binom') {
+                # result has 7 fields
                 @result = do_binom_test(\@l1, \@l2); 
                 @l1 = read_line($s1);
                 @l2 = read_line($s2);
                 if (not $o_allsites) {
-                    next if $result[3] < $o_total_freq_prob;
-                    next if $result[4] == -1;
+                    next if $result[3] eq "." or $result[3] < $o_total_freq_prob;
+                    next if $result[4] eq "." or $result[4] eq "-1";
+                    next if $result[5] eq "." and $result[6] eq ".";
                 }
             } elsif ($o_pool_test_type eq 'chisq') {
+                # result has 5 fields
                 @result = do_chisq_test(\@l1, \@l2); 
                 @l1 = read_line($s1);
                 @l2 = read_line($s2);
@@ -298,3 +311,4 @@ while (@l1 and @l2) {
     }
 }
 
+print STDERR "Finished single parent test\n";

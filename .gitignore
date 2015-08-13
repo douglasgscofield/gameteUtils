@@ -24,3 +24,6 @@ test.pl
 *.pro
 *.fai
 *.fa
+.RData
+.Rhistory
+chr1.*
