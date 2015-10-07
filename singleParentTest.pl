@@ -171,7 +171,7 @@ sub do_binom_test($$) {
     my @d = sorted_total_counts($l1, $l2);
     my $cov = $d[2]->[2] + $d[3]->[2];
 
-    my $otot = "binom $base[$d[3]->[3]]/$base[$d[2]->[3]]:$d[3]->[2]/$d[2]->[2]";
+    my $otot = "binom,$base[$d[3]->[3]]/$base[$d[2]->[3]]:$d[3]->[2]/$d[2]->[2]";
 
     return ($l1->[0], $l1->[1], $otot, ".", ".", ".", ".") if $cov < $o_mincov;  # insufficient coverage
 
@@ -224,8 +224,8 @@ sub do_chisq_test($$) {
     my @d = sorted_total_counts($l1, $l2);
     my $cov = $d[2]->[2] + $d[3]->[2];
 
-    my $o = "$base[$d[3]->[3]]/$base[$d[2]->[3]] " .  # allele 1 / allele 2
-            "chisq $d[3]->[0]/$d[2]->[0] , $d[3]->[1]/$d[2]->[1]";  # counts sample 2 , counts sample 2
+    my $o = "$base[$d[3]->[3]]/$base[$d[2]->[3]]," .  # allele 1 / allele 2
+            "chisq,$d[3]->[0]/$d[2]->[0],$d[3]->[1]/$d[2]->[1]";  # counts sample 2 , counts sample 2
 
     return ($l1->[0], $l1->[1], $o, ".", ".") if $cov < $o_mincov;  # insufficient coverage
     return ($l1->[0], $l1->[1], $o, "-1", "-1") if $d[1]->[2] >= $cov * $o_max_allele_3;  # there is an allele 3

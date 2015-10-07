@@ -26,4 +26,7 @@ test.pl
 *.fa
 .RData
 .Rhistory
-chr1.*
+*.png
+*.txt
+.Rproj.user
+*.Rproj
