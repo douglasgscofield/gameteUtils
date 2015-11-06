@@ -20,7 +20,10 @@ sub binomial_test($$) {
         #print STDERR "found [ $x, $n ]\n";
         return $BT{$n}{$x};
     }
-    croak "invalid number of successes or trials" if $x > $n or $n <= 0 or $x < 0;
+    if ($x > $n or $n <= 0 or $x < 0) {
+        carp "invalid number of successes or trials (x = $x, n = $n)";
+        return -1;
+    }
     $x = $n - $x if $x > $n / 2.0;  # reverse x
     my $prob = pbinom($x, $n, 0.5);
     # $prob = 1 if $prob > 1;  # unnecessary with 1-tailed test
@@ -36,7 +39,10 @@ sub binomial_test2($$) {
         #print STDERR "found [ $x, $n ]\n";
         return $BT2{$n}{$x};
     }
-    croak "invalid number of successes or trials" if $x > $n or $n <= 0 or $x < 0;
+    if ($x > $n or $n <= 0 or $x < 0) {
+        carp "invalid number of successes or trials (x = $x, n = $n)";
+        return -1;
+    }
     $x = $n - $x if $x > $n / 2.0;  # reverse x
     my $prob = pbinom($x, $n, 0.5) * 2;  # double prob, the "2" bit
     $prob = 1 if $prob > 1;
