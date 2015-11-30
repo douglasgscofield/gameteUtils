@@ -30,3 +30,6 @@ test.pl
 *.txt
 .Rproj.user
 *.Rproj
+*conflicted*
+.dropbox
+Icon*

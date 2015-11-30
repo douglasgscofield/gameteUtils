@@ -3,7 +3,7 @@ library(naturalsort)
 
 read.data = function(file="Sample_17_all.singleParentTest.txt") {
     dat = read.delim(file, header=FALSE, na.strings=".", stringsAsFactors=FALSE)
-    names(dat) = c("chrom", "pos", "totaltest", "totaltest_p", "pooltest", "onepool_p", "twopool_p")
+    names(dat) = c("chrom", "pos", "totaltest", "totaltest_p", "pooltest", "twopool_p", "onepool_p")
     all.chromosomes = naturalsort(unique(sort(dat$chr)))
     attr(dat, "all.chromosomes") = all.chromosomes
     attr(dat, "chromosomes") = grep("chr", all.chromosomes, value = TRUE)
@@ -14,11 +14,11 @@ read.data = function(file="Sample_17_all.singleParentTest.txt") {
 #dat = read.data()
 #cat("chromosomes =", paste(collapse=" ", attr(dat, "chromosomes")), "\n\n")
 
-do.plot = function(chromosomes = attr(dat, "chromosomes")) {
+do.plot = function(chromosomes = attr(dat, "chromosomes"), do.png=FALSE) {
     for (chr in chromosomes) {
         sdat = subset(dat, chrom == chr)
         xl = range(c(1, sdat$pos))
-        png(paste0(chr, ".png"), width=1000, height=150)
+        if (do.png) png(paste0(chr, ".png"), width=1000, height=150)
         par(mar=c(3, 7, 0.5, 0), tcl=-0.3, mgp=c(1.5, 0.5, 0), las=1)
         cat("generating figure for", chr, "\n")
         opdat = subset(sdat, onepool_p <= 0.0001)
@@ -35,6 +35,6 @@ do.plot = function(chromosomes = attr(dat, "chromosomes")) {
         legend(x=mean(xl), y=2.5, col=c("#FF0000", "#00b000", "#0000FF"), pch=15, pt.cex = 1.5, horiz=TRUE, xjust = 0.5, yjust = 0.5, adj=c(0.05, 0.5),
                legend=c(paste0("two-p 0.00005 N = ", n.tpp2), paste0("two-p 0.001 N = ", n.tpp), paste0("one-p 0.0001 N = ", n.opp)),
                bty="n")
-        dev.off()
+        if (do.png) dev.off()
     }
 }
