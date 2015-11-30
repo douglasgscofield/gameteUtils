@@ -7,7 +7,7 @@
 #
 use strict;
 use warnings;
-use POSIX qw/isdigit/;
+use POSIX qw/isdigit log10/;
 use Getopt::Long;
 use List::Util;
 # http://stackoverflow.com/questions/21204733/a-better-chi-square-test-for-perl
@@ -28,6 +28,7 @@ my $o_max_allele_3 = 0.1;
 my $o_pool_freq_prob = 0.10;
 my $o_pool_test_type = "binom";
 
+my $o_log10_p = 1;
 my $o_allsites = 0;
 my $o_show_zerodiv = 1;
 
@@ -89,6 +90,7 @@ OPTIONS
 
   OTHER OPTIONS
 
+    --log10-p               For the two-pool test, output the log10-d P value [default $o_log10_p]
     --allsites              Show test result for all sites, not just those in each sample
     --show-zerodiv          Whether to show sites that had zero division errors during testing
     --no-show-zerodiv 
@@ -194,8 +196,10 @@ sub do_binom_test($$) {
     my $pool2prob = binomial_test($d[2]->[1], $pool2cov);
     $opool1 = "$opool1:" . sprintf("%.3f", $pool1prob);
     $opool2 = "$opool2:" . sprintf("%.3f", $pool2prob);
-    my $twopoolprob = sprintf("%.5f", $pool1prob * $pool2prob);
-    my $onepoolprob = $twopoolprob;
+    my $twopoolprob = $pool1prob * $pool2prob;
+    my $onepoolprob = sprintf("%.6f", $twopoolprob);
+    $twopoolprob = log10($twopoolprob) if $o_log10_p;
+    $twopoolprob = sprintf("%.6f", $twopoolprob);
 
     # now check to see if we can perform a two-pool test
     my $counts1 = $d[3]->[0] <=> $d[2]->[0];  # -1 of 3 < 2, 0 if 3 == 3, 1 if 3 > 2
@@ -258,7 +262,7 @@ sub do_chisq_test($$) {
     my $df = 1;
     my $prob = chisqrprob($df, $chi2);
     $chi2 = sprintf("%.6f", $chi2);
-    $prob = sprintf("%.4f", $prob);
+    $prob = sprintf("%.6f", $prob);
     return ($l1->[0], $l1->[1], $o, $chi2, $prob);
 }
 
