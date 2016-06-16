@@ -1,5 +1,8 @@
 #!/usr/bin/env perl
 
+# This is a draft script, not currently used in analyses.  It is intended to be a
+# platform to generate candidate null distributions for tests.
+
 # Copyright (c) 2012,2015 Douglas G. Scofield, Uppsala University
 # douglasgscofield@gmail.com
 #
@@ -77,7 +80,6 @@ OPTIONS
     perhaps that will not hold up.  The two options below are ignored unless --no-total-freq-test
     is specified.
 
-    --mincov INT            Minimum total read coverage to consider a site
     --minalt INT            Minimum reads for alternate allele to consider a site
 
   ALLELE FREQUENCY TESTS
@@ -91,7 +93,7 @@ OPTIONS
 
   OTHER OPTIONS
 
-    --log10-p               For the two-pool test, output the log10-d P value [default $o_log10_p]
+    --log10-p|--no-log10-p  For the two-pool test, output the log10-d P value [default $o_log10_p]
     --allsites              Show test result for all sites, not just those in each sample
     --show-zerodiv          Whether to show sites that had zero division errors during testing
     --no-show-zerodiv 
@@ -109,8 +111,8 @@ sub print_usage_and_exit($) {
 
 GetOptions(
     "1=s"                 => \$o_sample1,
-    "2=s"                 => \$o_sample2,
-    "fai=s"               => \$o_fai,
+#    "2=s"                 => \$o_sample2,
+#    "fai=s"               => \$o_fai,
     "total-freq-test"     => sub { $o_total_freq_test = 1 },
     "no-total-freq-test"  => sub { $o_total_freq_test = 0 },
     "total-freq-prob=f"   => \$o_total_freq_prob,
@@ -123,23 +125,25 @@ GetOptions(
     "show-zerodiv"        => sub { $o_show_zerodiv = 1 },
     "no-show-zerodiv"     => sub { $o_show_zerodiv = 0 },
     "max-p-val=f"         => \$o_max_p_val,
+    "log10-p"             => sub { $o_log10_p = 1 },
+    "no-log10-p"          => sub { $o_log10_p = 0 },
     "help|?"              => \$o_help,
 ) or print_usage_and_exit("");
 
-print_usage_and_exit("") if $o_help or not $o_sample1 or not $o_sample2;
+print_usage_and_exit("") if $o_help or not $o_sample1;# or not $o_sample2;
 
 # fill reference sequence order hash from fai file
-my %REF_ORDER;
-my $ref_index = 0;
-open (my $ref, "<", $o_fai) or die "cannot open Fasta index file '$o_fai': $!";
-while (<$ref>) {
-    my @l = split /\t/;
-    $REF_ORDER{$l[0]} = ++$ref_index if not exists $REF_ORDER{$l[0]};
-}
-print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai\n";
+#my %REF_ORDER;
+#my $ref_index = 0;
+#open (my $ref, "<", $o_fai) or die "cannot open Fasta index file '$o_fai': $!";
+#while (<$ref>) {
+#    my @l = split /\t/;
+#    $REF_ORDER{$l[0]} = ++$ref_index if not exists $REF_ORDER{$l[0]};
+#}
+#print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai\n";
 
 open (my $s1, "<", $o_sample1) or die "cannot open sample 1 profile '$o_sample1': $!";
-open (my $s2, "<", $o_sample2) or die "cannot open sample 2 profile '$o_sample2': $!";
+#open (my $s2, "<", $o_sample2) or die "cannot open sample 2 profile '$o_sample2': $!";
 
 sub read_line($) {
     my $fh = shift;
@@ -147,6 +151,17 @@ sub read_line($) {
     return () if ! $l;
     chomp $l;
     return split /\t/, $l;
+}
+
+sub read_line_null($) {
+    my $fh = shift;
+    my $l = <$fh>;
+    print STDERR "line $.\n" if $. % 100000 == 0;
+    return () if ! $l;
+    chomp $l;
+    my @l = split /\t/, $l;
+    @l = ( @l[0..3], 0, 0, @l[4..5], 0, 0 );
+    return @l;
 }
 
 my @base = qw/ A C G T /;
@@ -195,6 +210,7 @@ sub do_binom_test($$) {
     my $pool2cov = $d[3]->[1] + $d[2]->[1];
     my $pool1prob = binomial_test($d[2]->[0], $pool1cov);
     my $pool2prob = binomial_test($d[2]->[1], $pool2cov);
+    die "error with probabilities at $o_sample1 input line $." if $pool1prob == -1 or $pool2prob == -1;
     $opool1 = "$opool1:" . sprintf("%.3f", $pool1prob);
     $opool2 = "$opool2:" . sprintf("%.3f", $pool2prob);
     my $twopoolprob = $pool1prob * $pool2prob;
@@ -267,53 +283,38 @@ sub do_chisq_test($$) {
     return ($l1->[0], $l1->[1], $o, $chi2, $prob);
 }
 
-print STDERR "Starting single parent test with '$o_sample1' and '$o_sample2'\n";
+print STDERR "Constructing single parent null distribution with '$o_sample1'\n";# and '$o_sample2'\n";
 
-my @l1 = read_line($s1);
-my @l2 = read_line($s2);
+my @l1 = read_line_null($s1);
 
-while (@l1 and @l2) {
-    if ($l1[0] eq $l2[0]) { # same reference
-        if ($l1[1] == $l2[1]) { # same position
-            my @result;
-            if ($o_pool_test_type eq 'binom') {
-                # result has 7 fields
-                @result = do_binom_test(\@l1, \@l2); 
-                @l1 = read_line($s1);
-                @l2 = read_line($s2);
-                if (not $o_allsites) {
-                    next if $result[3] eq "." or $result[3] < $o_total_freq_prob;
-                    next if $result[4] eq "." or $result[4] eq "-1";
-                    next if $result[5] eq "." and $result[6] eq ".";
-                }
-            } elsif ($o_pool_test_type eq 'chisq') {
-                # result has 5 fields
-                @result = do_chisq_test(\@l1, \@l2); 
-                @l1 = read_line($s1);
-                @l2 = read_line($s2);
-                if (not $o_allsites) {
-                    next if $result[3] =~ m/^[\.0]$/;
-                    next if $result[4] > $o_max_p_val;
-                    next if $result[3] == -1 && $result[4] == -1 && ! $o_show_zerodiv;
-                }
-            } else {
-                die "unknown test type $o_pool_test_type";
-            }
-            print STDOUT join("\t", @result), "\n";
-        } elsif ($l1[1] < $l2[1]) { # advance $l1
-            @l1 = read_line($s1);
-        } elsif ($l2[1] < $l1[1]) { # advance $l2
-            @l2 = read_line($s2);
-        } else {
-            die "unknown condition involving positions";
+while (@l1) {
+    my @l2 = @l1[0..1, 6..9];
+    @l1 = @l1[0..5];
+    my @result;
+    if ($o_pool_test_type eq 'binom') {
+        # result has 7 fields
+        @result = do_binom_test(\@l1, \@l2); 
+        @l1 = read_line_null($s1);
+        #@l2 = read_line($s2);
+        if (not $o_allsites) {
+            next if $result[3] eq "." or $result[3] < $o_total_freq_prob;
+            next if $result[4] eq "." or $result[4] eq "-1";
+            next if $result[5] eq "." and $result[6] eq ".";
         }
-    } elsif ($REF_ORDER{$l1[0]} < $REF_ORDER{$l2[0]}) { # advance $l1
-        @l1 = read_line($s1);
-    } elsif ($REF_ORDER{$l2[0]} < $REF_ORDER{$l1[0]}) { # advance $l2
-        @l2 = read_line($s2);
+    } elsif ($o_pool_test_type eq 'chisq') {
+        # result has 5 fields
+        @result = do_chisq_test(\@l1, \@l2); 
+        @l1 = read_line_null($s1);
+        #@l2 = read_line($s2);
+        if (not $o_allsites) {
+            next if $result[3] =~ m/^[\.0]$/;
+            next if $result[4] > $o_max_p_val;
+            next if $result[3] == -1 && $result[4] == -1 && ! $o_show_zerodiv;
+        }
     } else {
-        die "unknown condition involving reference order";
+        die "unknown test type $o_pool_test_type";
     }
+    print STDOUT join("\t", @result), "\n";
 }
 
 print STDERR "Finished single parent test\n";
