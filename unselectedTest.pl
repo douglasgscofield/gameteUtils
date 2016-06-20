@@ -22,8 +22,8 @@ my $o_hets_file;
 my $o_pool_file;
 my $o_unselected_test = 1;
 my $o_unselected_prob = 0.01;
-my $o_null_fraction = 0.0;
-my $o_mincov = 16; # 10
+my $o_null_fraction = 0.001;
+my $o_mincov = 8; # 10
 my $o_genotype = 1;
 my $o_max_allele_3 = 0.1;
 
@@ -31,7 +31,7 @@ my $o_pool_freq_prob = 0.10;
 my $o_pool_test_type = "binom";
 
 my $o_log10_p = 0;
-my $o_allsites = 0;
+my $o_allsites = 1;
 
 my $n_homozygous = 0;
 my $o_max_p_val = 0.05;
@@ -40,6 +40,9 @@ my $o_help;
 my $current_reference = ""; # the name of the current reference sequence
 my $N_references = 0; # the number of reference sequences seen
 my $N_coordinates = 0; # the total number of coordinates seen
+my $N_indels = 0; # total number of indels skipped
+my $o_indels;
+my %INDELS;
 
 my $usage = "
 NAME
@@ -159,16 +162,25 @@ print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_f
 
 open (my $h, "<", $o_hets_file) or die "cannot open hets file '$o_hets_file': $!";
 open (my $p, "<", $o_pool_file) or die "cannot open pool profile '$o_pool_file': $!";
+$o_indels = $o_hets_file . "_indels.txt";
+open (my $indels, ">", $o_indels) or die "cannot open indels output file '$o_indels': $!"; 
 
 sub read_hets_line() {
+    READ_LINE:
     my $l = <$h>;
     while ($l and $l =~ /^#/) {
         $l = <$h>;
     }
     return () if ! $l;
     chomp $l;
-    print STDERR "read_hets_line: '$l'\n";
+    #print STDERR "read_hets_line: '$l'\n";
     my @l = split /\t/, $l;
+    if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
+        ++$N_indels;
+        ++$INDELS{"$l[0]:$l[1]"};
+        print { $indels } "INDEL\t", join("\t", @l[(0,1,3,4)]), "\n";
+        goto READ_LINE;
+    }
     # return CHROM POS REF ALT
     return @l[(0,1,3,4)];
 }
@@ -177,7 +189,7 @@ sub read_pool_line() {
     my $l = <$p>;
     return () if ! $l;
     chomp $l;
-    print STDERR "read_pool_line: '$l'\n";
+    #print STDERR "read_pool_line: '$l'\n";
     return split /\t/, $l;
 }
 
@@ -190,7 +202,7 @@ sub sorted_pool_counts($) {
               [ $l1->[3], 1 ],   # C
               [ $l1->[4], 2 ],   # G
               [ $l1->[5], 3 ] ); # T
-    return sort { $a->[2] <=> $b->[2] } @d;
+    return sort { $a->[0] <=> $b->[0] } @d;
 }
 
 # for do_unselected_test(), output is:
@@ -216,7 +228,8 @@ sub do_unselected_test {
 
     if ($o_genotype and defined($href) and defined($halt)) { # check for incompatible genotype
         carp "unreasonable ref '$href' and alt '$halt' alleles" if !defined($base{$href}) or !defined($base{$halt});
-        if (($href eq $major and $halt eq $minor) or ($href eq $minor and $halt eq $major)) {
+        if (($href ne $major and $halt ne $minor) and ($href ne $minor and $halt ne $major)) {
+            $otot .= ",$href/$halt";
             return ($l->[0], $l->[1], $otot, $prob, "genotype");
         }
     }
@@ -258,7 +271,7 @@ while (@h and @p) {
     } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
         @h = read_hets_line(); # advance $h because wrong ref sequence
     } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
-        if ($o_null_fraction > 0.0 and rand() < $o_null_fraction) {
+        if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
             my @result = do_unselected_test(\@p); 
             $result[4] = "null_$result[4]";
             print STDOUT join("\t", @result), "\n";
@@ -268,6 +281,9 @@ while (@h and @p) {
         die "unknown condition involving reference order";
     }
 }
+
+
+print STDERR "Skipped $N_indels indels\n";
 
 print STDERR "Finished unselected test\n";
 
