@@ -208,9 +208,10 @@ sub sorted_pool_counts($) {
 # for do_unselected_test(), output is:
 # 0: reference
 # 1: position
-# 2: test description string
-# 3: unselected probability
-# 4: test result string
+# 2: read coverage
+# 3: test description string
+# 4: unselected probability
+# 5: test result string
 sub do_unselected_test {
     my ($l, $href, $halt) = @_;
     my @d = sorted_pool_counts($l);
@@ -220,22 +221,22 @@ sub do_unselected_test {
     my $minor = $base[$d[2]->[1]];  # minor allele
     my $otot = "binom,$major/$minor:$d[3]->[0]/$d[2]->[0]";
 
-    return ($l->[0], $l->[1], $otot, ".", "zerocov") if ($cov == 0); # zero coverage
+    return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov") if ($cov == 0); # zero coverage
 
     my $prob = sprintf("%.5f", binomial_test($d[2]->[0], $cov));
 
-    return ($l->[0], $l->[1], $otot, $prob, "mincov") if ($cov < $o_mincov); # insufficient coverage
+    return ($l->[0], $l->[1], $cov, $otot, $prob, "mincov") if ($cov < $o_mincov); # insufficient coverage
 
     if ($o_genotype and defined($href) and defined($halt)) { # check for incompatible genotype
         carp "unreasonable ref '$href' and alt '$halt' alleles" if !defined($base{$href}) or !defined($base{$halt});
         if (($href ne $major and $halt ne $minor) and ($href ne $minor and $halt ne $major)) {
             $otot .= ",$href/$halt";
-            return ($l->[0], $l->[1], $otot, $prob, "genotype");
+            return ($l->[0], $l->[1], $cov, $otot, $prob, "genotype");
         }
     }
-    return ($l->[0], $l->[1], $otot, $prob, "allele3") if ($d[1]->[0] >= $cov * $o_max_allele_3); # if coverage of allele 3 too high
-    return ($l->[0], $l->[1], $otot, $prob, "binom_fail") if ($prob < $o_unselected_prob); # effectively homozygous site
-    return ($l->[0], $l->[1], $otot, $prob, "binom_pass");
+    return ($l->[0], $l->[1], $cov, $otot, $prob, "allele3") if ($d[1]->[0] >= $cov * $o_max_allele_3); # if coverage of allele 3 too high
+    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_fail") if ($prob < $o_unselected_prob); # effectively homozygous site
+    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_pass");
 }
 
 print STDERR "Starting unselected test with '$o_hets_file' and '$o_pool_file'\n";
@@ -247,12 +248,12 @@ while (@h and @p) {
     if ($h[0] eq $p[0]) { # same reference
         if ($h[1] == $p[1]) { # same position
             my @result = do_unselected_test(\@p, $h[2], $h[3]); 
-            # result has 5 fields, last is test state
+            # result has 6 fields, last is test state
             @h = read_hets_line();
             @p = read_pool_line();
-            next if $result[4] ne "binom_pass" and not $o_allsites;
+            next if $result[5] ne "binom_pass" and not $o_allsites;
             # prefix the test state with "het_" to show this was a called het site
-            $result[4] = "het_$result[4]";
+            $result[5] = "het_$result[5]";
             print STDOUT join("\t", @result), "\n";
         } elsif ($h[1] < $p[1]) {
             @h = read_hets_line(); # advance hets file
@@ -261,7 +262,7 @@ while (@h and @p) {
             # check to see if we can treat it as a null site
             if ($o_null_fraction > 0.0 and rand() < $o_null_fraction) {
                 my @result = do_unselected_test(\@p, undef, undef); 
-                $result[4] = "null_$result[4]";
+                $result[5] = "null_$result[5]";
                 print STDOUT join("\t", @result), "\n";
             }
             @p = read_pool_line(); # now advance pool file
@@ -273,7 +274,7 @@ while (@h and @p) {
     } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
         if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
             my @result = do_unselected_test(\@p); 
-            $result[4] = "null_$result[4]";
+            $result[5] = "null_$result[5]";
             print STDOUT join("\t", @result), "\n";
         }
         @p = read_pool_line(); # advance $p because wrong ref sequence
