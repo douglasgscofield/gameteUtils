@@ -1,7 +1,8 @@
-#!/usr/bin/env perl5
+#!/usr/bin/env perl
 
 # DONE: consistent allele ordering across pools
 # DONE: after the above, add allele frequencies
+# TODO: chr only
 # TODO: two-tailed unselected probability
 # TODO: probability output: was %0.5f but adjust during output??
 # TODO: handle non-0/1 heterozygotes
@@ -42,6 +43,7 @@ my $o_max_allele_3 = 0.1;
 my $o_log10_p = 1;
 my $o_sort_bases = 1;
 my $o_allsites = 1;
+my $o_chr_only = 1;
 
 my $n_homozygous = 0;
 my $o_max_p_val = 0.05;
@@ -51,7 +53,8 @@ my $current_reference = ""; # the name of the current reference sequence
 my $N_references = 0; # the number of reference sequences seen
 my $N_coordinates = 0; # the total number of coordinates seen
 my $N_indels = 0; # total number of indels skipped
-my $o_indels;  # $indels is file handle for indels file
+my $o_indels = 0;
+my $indels;  # $indels is file handle for indels file
 my %INDELS;
 
 my $usage_short = "
@@ -68,6 +71,8 @@ my $usage_short = "
         --mincov INT             [default $o_mincov]
         --max-allele-3 FLOAT     [default $o_max_allele_3]
         --log10-p                [default $o_log10_p]
+        --chr-only               [default $o_chr_only]
+        --indels                 [default $o_indels]
         --allsites               [default $o_allsites]
         --sort-bases             [default $o_sort_bases]
         --no-sort-bases
@@ -162,6 +167,10 @@ OPTIONS
 
     --log10-p     Output log10-d P values for two-pool test [default $o_log10_p]
 
+    --chr-only    Only sites on reference sequences beginning with 'chr'
+
+    --indels      Write apparent indels to an indels output file [default $o_indels]
+
     --allsites    Show test result for all heterozygous sites, not just those
                   for which the unselected pool passes the unselected test
 
@@ -242,6 +251,8 @@ GetOptions(
     "mincov=i"            => \$o_mincov,
     "max-allele-3=f"      => \$o_max_allele_3,
     "log10-p"             => \$o_log10_p,
+    "chr-only"            => \$o_chr_only,
+    "no-chr-only"         => sub { $o_chr_only = 0 },
     "allsites"            => \$o_allsites,
     "sort-bases"          => \$o_sort_bases,
     "no-sort-bases"       => sub { $o_sort_bases = 0 },
@@ -280,8 +291,10 @@ sub open_possibly_gzipped($) {
 
 my $h = open_possibly_gzipped($o_hets_file);
 
-$o_indels = $o_hets_file . "_indels.txt";
-open (my $indels, ">", $o_indels) or die "cannot open indels output file '$o_indels': $!"; 
+if ($o_indels) {
+    $o_indels = $o_hets_file . "_indels.txt";
+    open ($indels, ">", $o_indels) or die "cannot open indels output file '$o_indels': $!"; 
+}
 
 my $u = open_possibly_gzipped($o_unselected_file);
 my $s1 = open_possibly_gzipped($o_selected_1_file);
@@ -293,6 +306,11 @@ sub read_hets_line() {
     while ($l and $l =~ /^#/) {
         $l = <$h>;
     }
+    if ($o_chr_only) {
+        while ($l and $l =~ /^chr/) {
+            $l = <$h>;
+        }
+    }
     return () if ! $l;
     chomp $l;
     #print STDERR "read_hets_line: '$l'\n";
@@ -300,7 +318,7 @@ sub read_hets_line() {
     if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
         ++$N_indels;
         ++$INDELS{"$l[0]:$l[1]"};
-        print { $indels } "INDEL\t", join("\t", @l[(0,1,3,4)]), "\n";
+        print { $indels } "INDEL\t", join("\t", @l[(0,1,3,4)]), "\n" if $o_indels;
         goto READ_LINE;
     }
     # return CHROM POS REF ALT
@@ -311,6 +329,11 @@ sub read_hets_line() {
 sub read_profile_line($$) {
     my ($fh, $tag) = @_;
     my $l = <$fh>;
+    if ($o_chr_only) {
+        while ($l and $l =~ /^chr/) {
+            $l = <$h>;
+        }
+    }
     return () if ! $l;
     chomp $l;
     #print STDERR "read_profile_line:$tag: '$l'\n";
@@ -505,6 +528,8 @@ max-allele-3              : $o_max_allele_3
 
 log10-p                   : $o_log10_p
 allsites                  : $o_allsites
+chr-only                  : $o_chr_only
+indels                    : $o_indels
 sort-bases                : $o_sort_bases
 
 ";
