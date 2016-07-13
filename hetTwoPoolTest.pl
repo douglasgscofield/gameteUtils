@@ -1,11 +1,12 @@
 #!/usr/bin/env perl
 
-# DONE: consistent allele ordering across pools
-# DONE: after the above, add allele frequencies
-# TODO: chr only
+# TODO: fix ref issues
 # TODO: two-tailed unselected probability
 # TODO: probability output: was %0.5f but adjust during output??
 # TODO: handle non-0/1 heterozygotes
+# DONE: consistent allele ordering across pools
+# DONE: after the above, add allele frequencies
+# DONE: write out putative indel sites only with --indels
 #
 # BUG? chr1 82219 seeming three alleles
 
@@ -43,7 +44,6 @@ my $o_max_allele_3 = 0.1;
 my $o_log10_p = 1;
 my $o_sort_bases = 1;
 my $o_allsites = 1;
-my $o_chr_only = 1;
 
 my $n_homozygous = 0;
 my $o_max_p_val = 0.05;
@@ -71,7 +71,6 @@ my $usage_short = "
         --mincov INT             [default $o_mincov]
         --max-allele-3 FLOAT     [default $o_max_allele_3]
         --log10-p                [default $o_log10_p]
-        --chr-only               [default $o_chr_only]
         --indels                 [default $o_indels]
         --allsites               [default $o_allsites]
         --sort-bases             [default $o_sort_bases]
@@ -167,8 +166,6 @@ OPTIONS
 
     --log10-p     Output log10-d P values for two-pool test [default $o_log10_p]
 
-    --chr-only    Only sites on reference sequences beginning with 'chr'
-
     --indels      Write apparent indels to an indels output file [default $o_indels]
 
     --allsites    Show test result for all heterozygous sites, not just those
@@ -251,8 +248,6 @@ GetOptions(
     "mincov=i"            => \$o_mincov,
     "max-allele-3=f"      => \$o_max_allele_3,
     "log10-p"             => \$o_log10_p,
-    "chr-only"            => \$o_chr_only,
-    "no-chr-only"         => sub { $o_chr_only = 0 },
     "allsites"            => \$o_allsites,
     "sort-bases"          => \$o_sort_bases,
     "no-sort-bases"       => sub { $o_sort_bases = 0 },
@@ -306,11 +301,6 @@ sub read_hets_line() {
     while ($l and $l =~ /^#/) {
         $l = <$h>;
     }
-    if ($o_chr_only) {
-        while ($l and $l =~ /^chr/) {
-            $l = <$h>;
-        }
-    }
     return () if ! $l;
     chomp $l;
     #print STDERR "read_hets_line: '$l'\n";
@@ -329,11 +319,6 @@ sub read_hets_line() {
 sub read_profile_line($$) {
     my ($fh, $tag) = @_;
     my $l = <$fh>;
-    if ($o_chr_only) {
-        while ($l and $l =~ /^chr/) {
-            $l = <$h>;
-        }
-    }
     return () if ! $l;
     chomp $l;
     #print STDERR "read_profile_line:$tag: '$l'\n";
@@ -528,7 +513,6 @@ max-allele-3              : $o_max_allele_3
 
 log10-p                   : $o_log10_p
 allsites                  : $o_allsites
-chr-only                  : $o_chr_only
 indels                    : $o_indels
 sort-bases                : $o_sort_bases
 
@@ -601,7 +585,21 @@ while (@h and @p and @s1 and @s2) {
         }
     } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
         @h = read_hets_line(); # advance $h because wrong ref sequence
+    } elsif ($REF_ORDER{$p[0]} != $REF_ORDER{$s1[0]} or $REF_ORDER{$p[0]} != $REF_ORDER{$s2[0]}) {
+        # sync up pools
+        do {
+            if ($REF_ORDER{$p[0]} < $REF_ORDER{$s1[0]}) {
+                @p = read_unselected_line();
+            } elsif ($REF_ORDER{$s1[0]} < $REF_ORDER{$s2[0]}) {
+                @s1 = read_selected_1_line();
+            } elsif ($REF_ORDER{$s2[0]} < $REF_ORDER{$p[0]} or $REF_ORDER{$s2[0]} < $REF_ORDER{$s1[0]}) {
+                @s2 = read_selected_2_line();
+            }
+        } until ($REF_ORDER{$p[0]} == $REF_ORDER{$s1[0]} and $REF_ORDER{$p[0]} == $REF_ORDER{$s2[0]});
     } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
+        # hets is ahead of the pools, and we know the pools are synced, so
+        # we know that this common pool site is not in hets check to see if
+        # we can treat it as a null site
         if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
             my @result = do_combined_test(\@p, \@s1, \@s2, undef, undef);
             $result[5] = "null_$result[5]";
