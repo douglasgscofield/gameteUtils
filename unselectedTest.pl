@@ -26,7 +26,7 @@ my $o_hetsites_file;
 my $o_hetprofile_file;
 my $o_unselected_file;
 my $o_unselected_prob = 0.01;
-my $o_null_fraction = 0.001;
+my $o_null_fraction = 0.000;
 my $o_mincov = 8; # 10
 my $o_genotype = 1;
 my $o_max_allele_3 = 0.1;
@@ -417,11 +417,11 @@ my @hp; @hp = read_hetprofile_line() if $o_hetprofile_file;
 sub print_result($) {  # do rounding, etc. for output
     my $r = shift;
     # col 5 is always a probability even though its meaning shifts with --hetprofile
-    $r->[5] = log10($r->[5]) if $r->[5] ne "." and $o_log10_p;
-    $r->[5] = sprintf("%.7f", $r->[5]) if $r->[5] ne ".";
+    $r->[4] = log10($r->[4]) if $r->[4] ne "." and $o_log10_p;
+    $r->[4] = sprintf("%.7f", $r->[4]) if $r->[4] ne ".";
     if ($o_hetprofile_file) {
-        $r->[9] = log10($r->[9]) if $r->[9] ne "." and $o_log10_p;
-        $r->[9] = sprintf("%.7f", $r->[9]) if $r->[9] ne ".";
+        $r->[8] = log10($r->[8]) if $r->[8] ne "." and $o_log10_p;
+        $r->[8] = sprintf("%.7f", $r->[8]) if $r->[8] ne ".";
     }
     print STDOUT join("\t", @$r), "\n";
 }
