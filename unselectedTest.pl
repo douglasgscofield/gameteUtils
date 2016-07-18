@@ -1,5 +1,11 @@
 #!/usr/bin/env perl
 
+# TODO: create module to reduce lots of duplicated code between here and unselectedTest.pl
+# TODO: two-tailed unselected probability ?
+# TODO: probability output: was %0.5f but adjust during output??
+# TODO: handle non-0/1 heterozygotes
+# TODO: add usage of hetsites-reads profile
+
 # Copyright (c) 2016 Douglas G. Scofield, Uppsala University
 # douglas.scofield@ebc.uu.se, douglasgscofield@gmail.com
 #
@@ -11,8 +17,6 @@ use Carp;
 use POSIX qw/isdigit log10/;
 use Getopt::Long;
 use List::Util;
-# http://stackoverflow.com/questions/21204733/a-better-chi-square-test-for-perl
-use Statistics::Distributions qw/ chisqrprob /;
 use FindBin;
 use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest
 use BinomialTest qw/ binomial_test /;
@@ -21,29 +25,44 @@ my $o_fai_file;
 my $o_hetsites_file;
 my $o_hetprofile_file;
 my $o_unselected_file;
-my $o_unselected_test = 1;
 my $o_unselected_prob = 0.01;
 my $o_null_fraction = 0.001;
 my $o_mincov = 8; # 10
 my $o_genotype = 1;
 my $o_max_allele_3 = 0.1;
 
-my $o_pool_freq_prob = 0.10;
-my $o_pool_test_type = "binom";
-
-my $o_log10_p = 0;
+my $o_log10_p = 1;
+my $o_sort_bases = 1;
 my $o_allsites = 1;
-
-my $n_homozygous = 0;
-my $o_max_p_val = 0.05;
 
 my $o_help;
 my $current_reference = ""; # the name of the current reference sequence
 my $N_references = 0; # the number of reference sequences seen
 my $N_coordinates = 0; # the total number of coordinates seen
 my $N_indels = 0; # total number of indels skipped
-my $o_indels;
+my $o_indels = 1;
+my $indels;  # $indels is file handle for indels file
 my %INDELS;
+
+my $usage_short = "
+    $0 --fai reference.fa.fai --hetsites h.vcf [ --hetprofile het.pro ] --unselected u.pro 
+
+        --fai FILE
+        --hetsites FILE
+        --hetprofile FILE
+        --unselected FILE
+        --unselected-test FLOAT  [default $o_unselected_prob]
+        --null-fraction FLOAT    [default $o_null_fraction]
+        --mincov INT             [default $o_mincov]
+        --max-allele-3 FLOAT     [default $o_max_allele_3]
+        --log10-p                [default $o_log10_p]
+        --indels                 [default $o_indels]
+        --allsites               [default $o_allsites]
+        --sort-bases             [default $o_sort_bases]
+        --no-sort-bases
+        --help, -?               More detailed help message
+
+";
 
 my $usage = "
 NAME
@@ -58,76 +77,125 @@ SYNOPSIS
 
 OPTIONS
 
-    --fai FILE              Fasta index file for reference, required to specify the order of
-                            sequences in the VCF and profile files
+    --fai FILE    Fasta index file for reference, required to specify the order of
+                  sequences in the VCF and profile files
 
-    --hetsites FILE         VCF-format file specifying heterozygous sites. Use care in producing
-                            this file; for simplicity, this script only uses presence-absence 
-                            positional information from the file to determine whether a site is
-                            heterozygous, it explicitly does *not* use any sort of genotype
-                            quality, PASS/FAIL, etc.  Any sort of filtering you would wish to
-                            provide must be done before this file is read by this script.  One
-                            advantage of the simplification is that the file needn't be in a
-                            fully compliant VCF format, so long as the first five tab-separated
-                            columns of lines that do not begin with '#' contain the same
-                            information as is in the '#CHROM POS ID REF ALT' columns of a VCF.
-                            The ID isn't used and may be '.', but REF and ALT are used to check
-                            the alleles in the unselected pool.
+    --hetsites FILE
 
-    --hetprofile FILE       Profile produced from reads from individual used to call --hetsites
-                            VCF [OPTIONAL]
+                  VCF-format file specifying heterozygous sites. Use care in
+                  producing this file; for simplicity, this script only uses
+                  presence-absence positional information from the file to
+                  determine whether a site is heterozygous, it explicitly does
+                  *not* use any sort of genotype quality, PASS/FAIL, etc.  Any
+                  sort of filtering you would wish to provide must be done
+                  before this file is read by this script.  One advantage of
+                  the simplification is that the file needn't be in a fully
+                  compliant VCF format, so long as the first five tab-separated
+                  columns of lines that do not begin with '#' contain the same
+                  information as is in the '#CHROM POS ID REF ALT' columns of a
+                  VCF.  The ID isn't used and may be '.', but REF and ALT are
+                  used to check the alleles in the unselected pool.
 
-    --unselected FILE       Unselected pool profile.  If this is produced from a pileup, it will 
-                            contain all sites having read coverage.
+    --hetprofile FILE
 
-    --unselected-test FLOAT Test for deviation of pool allele frequency away from 1:1, using a
-                            two-sided binomial test with expected frequency 0.5.
-                            Only sites which fail this test (and thus have total ratio of
-                            1:1) will be given the differential frequency test via chi-squared.
-                            This test is performed by default, so it is unnecessary to specify
-                            this option, unless you want to change FLOAT, which is the probability
-                            threshold for the test; sites with binomial probabilities <= FLOAT
-                            are considered to fail this test and show allele frequency skew.  The
-                            5th column of output indicates the test disposition, and is prefixed
-                            with 'het_' for each site that is a called heterozygote.
-                            [default $o_unselected_prob]
+                  Profile base content for reads underlying hetsites VCF.  This
+                  file is OPTIONAL.  If it is included, then an unselected test
+                  is performed on the content of this file too, and those results
+                  columns precede those for the unselected test performed on the
+                  profile specified with --unselected.
+     
 
-    --null-fraction FLOAT   For fraction FLOAT sites that are *not* called heterozygotes, perform
-                            the unselected test as above.  Output This fraction is also subject to the
-                            --mincov and --max-allele-3 settings.  The 5th column of output indicates
-                            the test disposition, and is prefixed with 'null_' for each site tested as
-                            a result of this option.  [default $o_null_fraction]
+    --unselected FILE   Profile base content for 'unselected' pool
+ 
+    --unselected-test FLOAT
 
-    --no-unselected-test    Do NOT perform the unselected test
+                  Test for deviation of 'unselected' pool allele frequency away
+                  from 1:1, using a two-sided binomial test with expected
+                  frequency 0.5.  This is applied to the pool specified with
+                  the --unselected option.  This test is always performed and
+                  its result is always part of the output, so it is unnecessary
+                  to specify this option unless you want to change FLOAT, which
+                  is the probability threshold for the test. Sites with
+                  binomial probabilities <= FLOAT are marked as having failed
+                  this test and thus show allele frequency skew.  The 6th
+                  column of output indicates the test disposition, and is
+                  prefixed with 'het_' for each site that is a called
+                  heterozygote.  [default $o_unselected_prob]
 
-    --mincov INT            Minimum read coverage to consider a site [default $o_mincov]
+    --null-fraction FLOAT
 
-    --max-allele-3 FLOAT    Maximum accepted frequency count for a 3rd allele [default $o_max_allele_3]
+                  For fraction FLOAT sites that are *not* called heterozygotes,
+                  perform the unselected and selected tests as above.  Output
+                  This fraction is also subject to the --mincov and
+                  --max-allele-3 settings.  The 5th column of output indicates
+                  the test disposition, and is prefixed with 'null_' for each
+                  site tested as a result of this option.  [default
+                  $o_null_fraction]
+
+    --mincov INT  Minimum read coverage to consider a site, applied to each of
+                  the unselected and selected pools [default $o_mincov].
+
+    --max-allele-3 FLOAT
+
+                  Maximum accepted frequency count for a 3rd allele, applied to
+                  each of the unselected and selected pools [default $o_max_allele_3]
 
   OTHER OPTIONS
 
-    --log10-p               Output log10-d P values [default $o_log10_p]  NOT FUNCTIONAL
+    --log10-p     Output log10-d P values for two-pool test [default $o_log10_p]
 
-    --allsites              Show test result for all heterozygous sites, not just those that pass the test
+    --indels      Write apparent indels to an indels output file [default $o_indels]
 
-    --help, -?              Help message
+    --allsites    Show test result for all heterozygous sites, not just those
+                  for which the unselected pool passes the unselected test
+
+    --sort-bases
+    --no-sort-bases
+                  In output, sort, or do not sort, bases in lexical order (A,C,G,T)
+                  The default is ".($o_sort_bases?"":"not")." to sort
+
+    --help, -?    Help message
 
 OUTPUT
 
-Five tab-separated columns:
+Six tab-separated columns:
 
-    reference, position, test description, test probability, test result
+  1 reference
+  2 position
+  3 unselected pool read coverage
+  4 unselected pool test description string
+  5 unselected pool probability
+  6 unselected pool test result
 
 'Test result' contains one of the following, prefixed with 'het_' for a
 heterozygous site and 'null_' for a non-heterozygous site selected via
 --null-fraction.
 
-    zerocov    : no pool coverage at this site; test probability is reported as '.'
-    mincov     : pool coverage is below the --mincov value
-    genotype   : genotype incompatibility (REF and ALT do not match top pool alleles)
-    allele3    : the coverage frequency of a 3rd allele is higher than --max-allele-3
-    binom_fail : the binomial test is less than --unselected-prob
-    binom_pass : the binomial test is >= --unselected-prob
+  zerocov    : no unselected coverage at this site; test probability is reported as '.'
+  mincov     : unselected coverage is below the --mincov value
+  genotype   : genotype incompatibility (REF and ALT do not match top unselected alleles)
+  allele3    : the coverage frequency of a 3rd allele is higher than --max-allele-3
+  binom_fail : the binomial test is less than --unselected-prob
+  binom_pass : the binomial test is >= --unselected-prob
+
+If a --hetprofile file has been provided, then the output contains 10
+tab-separated columns, with the unselected test columns (described above) moved
+to columns 7-10, and columns 3-6 now containing the results of an unselected
+test applied to the contents of the --hetprofile file.  No special prefix is
+added to the test result in these columns.  The test result for the unselected
+test still contains the 'het_' or 'null_' prefixes as described above.
+
+  1 reference
+  2 position
+  3 hetprofile read coverage
+  4 hetprofile test description string
+  5 hetprofile probability
+  6 hetprofile test result
+  7 unselected pool read coverage
+  8 unselected pool test description string
+  9 unselected pool probability
+ 10 unselected pool test result
+
 
 ";
 
@@ -141,10 +209,10 @@ sub print_usage_and_exit {
 GetOptions(
     "fai=s"               => \$o_fai_file,
     "hetsites=s"          => \$o_hetsites_file,
-    "pool=s"              => \$o_unselected_file,
+    "hetprofile=s"        => \$o_hetprofile_file,
+    "unselected=s"        => \$o_unselected_file,
     "unselected-test=f"   => \$o_unselected_prob,
     "null-fraction=f"     => \$o_null_fraction,
-    "no-unselected-test"  => sub { $o_unselected_test = 0 },
     "mincov=i"            => \$o_mincov,
     "max-allele-3=f"      => \$o_max_allele_3,
     "log10-p"             => \$o_log10_p,
@@ -154,20 +222,49 @@ GetOptions(
 
 print_usage_and_exit() if $o_help or not $o_fai_file or not $o_hetsites_file or not $o_unselected_file;
 
+print_usage_and_exit() if $o_help 
+                          or not $o_fai_file
+                          or not $o_hetsites_file
+                          or not $o_unselected_file;
+
+my @base = qw/ A C G T /;
+my %base; $base{A} = 0; $base{C} = 1; $base{G} = 2; $base{T} = 3;
+
 # fill reference sequence order hash from fai file
 my %REF_ORDER;
 my $ref_index = 0;
-open (my $ref, "<", $o_fai_file) or die "cannot open Fasta index file '$o_fai_file': $!";
+open (my $ref, "<", $o_fai_file) or croak "cannot open Fasta index file '$o_fai_file': $!";
 while (<$ref>) {
     my @l = split /\t/;
     $REF_ORDER{$l[0]} = ++$ref_index if not exists $REF_ORDER{$l[0]};
 }
 print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_file\n";
 
-open (my $h, "<", $o_hetsites_file) or die "cannot open hetsites file '$o_hetsites_file': $!";
-open (my $p, "<", $o_unselected_file) or die "cannot open unselected profile '$o_unselected_file': $!";
-$o_indels = $o_hetsites_file . "_indels.txt";
-open (my $indels, ">", $o_indels) or die "cannot open indels output file '$o_indels': $!"; 
+sub open_possibly_gzipped($) {
+    my ($file, $fh) = shift;
+    if ($file =~ /\.gz$/) {
+        open ($fh, "-|", "gzip -dc $file") or croak "cannot open '$file': $!";
+    } else {
+        open ($fh, "<", $file) or croak "cannot open '$file': $!";
+    }
+    return $fh;
+}
+
+my $h = open_possibly_gzipped($o_hetsites_file);
+
+if ($o_indels) {
+    $o_indels = $o_hetsites_file . "_indels.txt";
+    if (! open ($indels, ">", $o_indels)) {
+        carp "cannot open indels output file '$o_indels', disabling option\n"; 
+        $o_indels = 0;
+    }
+}
+
+my $u = open_possibly_gzipped($o_unselected_file);
+my $hp;
+if ($o_hetprofile_file) {
+    $hp = open_possibly_gzipped($o_hetprofile_file);
+}
 
 sub read_hetsites_line() {
     READ_LINE:
@@ -182,23 +279,25 @@ sub read_hetsites_line() {
     if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
         ++$N_indels;
         ++$INDELS{"$l[0]:$l[1]"};
-        print { $indels } "INDEL\t", join("\t", @l[(0,1,3,4)]), "\n";
+        print { $indels } "INDEL\t", join("\t", @l[(0,1,3,4)]), "\n" if $o_indels;
         goto READ_LINE;
     }
     # return CHROM POS REF ALT
     return @l[(0,1,3,4)];
 }
 
-sub read_pool_line() {
-    my $l = <$p>;
+sub read_profile_line($$) {
+    my ($fh, $tag) = @_;
+    my $l = <$fh>;
     return () if ! $l;
     chomp $l;
-    #print STDERR "read_pool_line: '$l'\n";
+    #print STDERR "read_profile_line:$tag: '$l'\n";
     return split /\t/, $l;
 }
 
-my @base = qw/ A C G T /;
-my %base = map { $_ => 1 } @base;
+sub read_hetprofile_line() { return read_profile_line($hp, "hetprofile"); }
+
+sub read_unselected_line() { return read_profile_line($u, "unselected"); }
 
 sub sorted_pool_counts($) {
     my $l1 = shift;
@@ -207,6 +306,15 @@ sub sorted_pool_counts($) {
               [ $l1->[4], 2 ],   # G
               [ $l1->[5], 3 ] ); # T
     return sort { $a->[0] <=> $b->[0] } @d;
+}
+sub rounddot($) {
+    my $f = shift;
+    return $f eq "." ? $f : sprintf("%.7f", $f);
+}
+sub multdot($$) {
+    my ($p1, $p2) = @_;
+    my $ans = ($p1 eq "." or $p2 eq ".") ? "." : ($p1 * $p2);
+    return $ans;
 }
 
 # for do_unselected_test(), output is:
@@ -217,73 +325,211 @@ sub sorted_pool_counts($) {
 # 4: unselected probability
 # 5: test result string
 sub do_unselected_test {
-    my ($l, $href, $halt) = @_;
+    my ($l, $h_ref, $h_alt) = @_;
     my @d = sorted_pool_counts($l);
     my $cov = $d[2]->[0] + $d[3]->[0];
 
-    my $major = $base[$d[3]->[1]];  # major allele
-    my $minor = $base[$d[2]->[1]];  # minor allele
-    my $otot = "binom,$major/$minor:$d[3]->[0]/$d[2]->[0]";
+    my $allele1 = $base[$d[3]->[1]];
+    my $allele2 = $base[$d[2]->[1]];
+    my $otot = "binom,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
 
-    return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov") if ($cov == 0); # zero coverage
+    return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov")
+        if ($cov == 0); # zero coverage
 
-    my $prob = sprintf("%.5f", binomial_test($d[2]->[0], $cov));
+    my $prob = binomial_test($d[2]->[0], $cov);
 
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "mincov") if ($cov < $o_mincov); # insufficient coverage
+    return ($l->[0], $l->[1], $cov, $otot, $prob, "mincov")
+        if ($cov < $o_mincov); # insufficient coverage
 
-    if ($o_genotype and defined($href) and defined($halt)) { # check for incompatible genotype
-        carp "unreasonable ref '$href' and alt '$halt' alleles" if !defined($base{$href}) or !defined($base{$halt});
-        if (($href ne $major and $halt ne $minor) and ($href ne $minor and $halt ne $major)) {
-            $otot .= ",$href/$halt";
+    if ($o_genotype and defined($h_ref) and defined($h_alt)) {
+        # check for incompatible genotype
+
+        carp "unreasonable ref '$h_ref' and alt '$h_alt' alleles"
+            if !defined($base{$h_ref}) or !defined($base{$h_alt});
+
+        if (($h_ref ne $allele1 and $h_alt ne $allele2) and 
+            ($h_ref ne $allele2 and $h_alt ne $allele1)) {
+            $otot .= ",$h_ref/$h_alt";
             return ($l->[0], $l->[1], $cov, $otot, $prob, "genotype");
         }
     }
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "allele3") if ($d[1]->[0] >= $cov * $o_max_allele_3); # if coverage of allele 3 too high
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_fail") if ($prob < $o_unselected_prob); # effectively homozygous site
+
+    return ($l->[0], $l->[1], $cov, $otot, $prob, "allele3")
+        if ($d[1]->[0] >= $cov * $o_max_allele_3); # allele 3 coverage too high
+
+    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_fail")
+        if ($prob < $o_unselected_prob); # effectively homozygous site
+
     return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_pass");
 }
 
-print STDERR "Starting unselected test with '$o_hetsites_file' and '$o_unselected_file'\n";
+sub do_combined_test($$$$) {  # called if --hetprofile file given
+    my ($hp, $u, $h_ref, $h_alt) = @_;
+    my @result_hp = do_unselected_test($hp, $h_ref, $h_alt); 
+    # result_hp has 6 fields, last is test state
+    my @result_u = do_unselected_test($u, $h_ref, $h_alt); 
+    # result_u has 6 fields, last is test state
+    die "do_combined_test inconsistent ref/pos" if $result_hp[0] ne $result_u[0] or $result_hp[1] != $result_u[1];
+    # combined result has 
+    #  1 reference
+    #  2 position
+    #  3 hetprofile read coverage
+    #  4 hetprofile test description string
+    #  5 hetprofile probability
+    #  6 hetprofile test result
+    #  7 unselected pool read coverage
+    #  8 unselected pool test description string
+    #  9 unselected pool probability
+   #  10 unselected pool test result
+    return (@result_hp, @result_u[2..5]);
+}
+
+
+my $config = "Starting unselected test
+fai file                  : $o_fai_file
+het sites                 : $o_hetsites_file
+het profile               : $o_hetprofile_file
+unselected                : $o_unselected_file
+
+unselected-test crit prob : $o_unselected_prob
+
+null-fraction             : $o_null_fraction
+
+mincov                    : $o_mincov
+max-allele-3              : $o_max_allele_3
+
+log10-p                   : $o_log10_p
+indels                    : $o_indels
+allsites                  : $o_allsites
+indels                    : $o_indels
+sort-bases                : $o_sort_bases
+
+";
+my $outconfig = $config;
+$outconfig =~ s/^/#/mg;
+print STDERR $config;
+print STDOUT $outconfig;
 
 my @h = read_hetsites_line();  # CHROM POS REF ALT
-my @p = read_pool_line();  # CHROM POS A C G T N
+my @p = read_unselected_line(); # CHROM POS A C G T N
+my @hp; @hp = read_hetprofile_line() if $o_hetprofile_file;
 
-while (@h and @p) {
-    if ($h[0] eq $p[0]) { # same reference
-        if ($h[1] == $p[1]) { # same position
-            my @result = do_unselected_test(\@p, $h[2], $h[3]); 
-            # result has 6 fields, last is test state
-            @h = read_hetsites_line();
-            @p = read_pool_line();
-            next if $result[5] ne "binom_pass" and not $o_allsites;
-            # prefix the test state with "het_" to show this was a called het site
-            $result[5] = "het_$result[5]";
-            print STDOUT join("\t", @result), "\n";
-        } elsif ($h[1] < $p[1]) {
-            @h = read_hetsites_line(); # advance hetsites file
-        } elsif ($h[1] > $p[1]) {
-            # hetsites is ahead of the pool, so we know that this pool site is not in hetsites
-            # check to see if we can treat it as a null site
-            if ($o_null_fraction > 0.0 and rand() < $o_null_fraction) {
-                my @result = do_unselected_test(\@p, undef, undef); 
-                $result[5] = "null_$result[5]";
-                print STDOUT join("\t", @result), "\n";
+sub print_result($) {  # do rounding, etc. for output
+    my $r = shift;
+    # col 5 is always a probability even though its meaning shifts with --hetprofile
+    $r->[5] = log10($r->[5]) if $r->[5] ne "." and $o_log10_p;
+    $r->[5] = sprintf("%.7f", $r->[5]) if $r->[5] ne ".";
+    if ($o_hetprofile_file) {
+        $r->[9] = log10($r->[9]) if $r->[9] ne "." and $o_log10_p;
+        $r->[9] = sprintf("%.7f", $r->[9]) if $r->[9] ne ".";
+    }
+    print STDOUT join("\t", @$r), "\n";
+}
+
+if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
+    while (@h and @p and @hp) {
+        if ($h[0] eq $p[0] and $h[0] eq $hp[0]) { # same reference
+            if ($h[1] == $p[1] and $h[1] == $hp[1]) { # same position
+                my @result = do_combined_test(\@hp, \@p, $h[2], $h[3]);
+                @h = read_hetsites_line();
+                @p = read_unselected_line();
+                @hp = read_hetprofile_line();
+                next if $result[9] ne "binom_pass" and not $o_allsites;
+                # prefix the unselected test states with "het_" to show this was a called het site
+                $result[9] = "het_$result[9]";
+                #print STDOUT join("\t", @result), "\n";
+                print_result(\@result);
+            } elsif ($h[1] < $p[1]) {
+                @h = read_hetsites_line(); # advance hetsites file
+            } elsif ($p[1] != $hp[1]) {
+                # sync up hetprofile and unselected pool
+                do {
+                    if ($p[1] < $hp[1]) {
+                        @p = read_unselected_line();
+                    } elsif ($hp[1] < $p[1]) {
+                        @hp = read_hetprofile_line();
+                    }
+                } until ($p[1] == $hp[1]);
+            } elsif ($h[1] > $p[1]) {
+                # hetsites is ahead of hetprofile and the unselected pools, and
+                # we know they are synced, so we know that this common pool
+                # site is not in hetsites. check to see if we can treat it as a
+                # null site
+                if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
+                    my @result = do_combined_test(\@hp, \@p, undef, undef);
+                    $result[9] = "null_$result[9]";
+                    print_result(\@result);
+                }
+                @p = read_unselected_line(); # advance pools
+                @hp = read_hetprofile_line();
+            } else {
+                die "unknown condition involving positions";
             }
-            @p = read_pool_line(); # now advance pool file
+        } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
+            @h = read_hetsites_line(); # advance $h because wrong ref sequence
+        } elsif ($REF_ORDER{$p[0]} != $REF_ORDER{$hp[0]}) {
+            # sync up hetprofile and unselected pool
+            do {
+                if ($REF_ORDER{$p[0]} < $REF_ORDER{$hp[0]}) {
+                    @p = read_unselected_line();
+                } elsif ($REF_ORDER{$p[0]} > $REF_ORDER{$hp[0]}) {
+                    @hp = read_hetprofile_line();
+                }
+            } until ($REF_ORDER{$p[0]} == $REF_ORDER{$hp[0]});
+        } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
+            # hetsites is ahead of hetprofile and the unselected pools, and
+            # we know they are synced, so we know that this common pool
+            # site is not in hetsites. check to see if we can treat it as a
+            # null site
+            if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
+                my @result = do_combined_test(\@hp, \@p, undef, undef);
+                $result[9] = "null_$result[9]";
+                print_result(\@result);
+            }
+            @p = read_unselected_line(); # advance pools
+            @hp = read_hetprofile_line();
         } else {
-            die "unknown condition involving positions";
+            die "unknown condition involving reference order";
         }
-    } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
-        @h = read_hetsites_line(); # advance $h because wrong ref sequence
-    } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
-        if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
-            my @result = do_unselected_test(\@p); 
-            $result[5] = "null_$result[5]";
-            print STDOUT join("\t", @result), "\n";
+    }
+} else {  # no --hetprofile file, 6-column output
+    while (@h and @p) {
+        if ($h[0] eq $p[0]) { # same reference
+            if ($h[1] == $p[1]) { # same position
+                my @result = do_unselected_test(\@p, $h[2], $h[3]); 
+                # result has 6 fields, last is test state
+                @h = read_hetsites_line();
+                @p = read_unselected_line();
+                next if $result[5] ne "binom_pass" and not $o_allsites;
+                # prefix the test state with "het_" to show this was a called het site
+                $result[5] = "het_$result[5]";
+                print_result(\@result);
+            } elsif ($h[1] < $p[1]) {
+                @h = read_hetsites_line(); # advance hetsites file
+            } elsif ($h[1] > $p[1]) {
+                # hetsites is ahead of the pool, so we know that this pool site is not in hetsites
+                # check to see if we can treat it as a null site
+                if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
+                    my @result = do_unselected_test(\@p, undef, undef); 
+                    $result[5] = "null_$result[5]";
+                    print_result(\@result);
+                }
+                @p = read_unselected_line(); # now advance unselected file
+            } else {
+                croak "unknown condition involving positions";
+            }
+        } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
+            @h = read_hetsites_line(); # advance $h because wrong ref sequence
+        } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
+            if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
+                my @result = do_unselected_test(\@p); 
+                $result[5] = "null_$result[5]";
+                print_result(\@result);
+            }
+            @p = read_unselected_line(); # advance $p because wrong ref sequence
+        } else {
+            croak "unknown condition involving reference order";
         }
-        @p = read_pool_line(); # advance $p because wrong ref sequence
-    } else {
-        die "unknown condition involving reference order";
     }
 }
 

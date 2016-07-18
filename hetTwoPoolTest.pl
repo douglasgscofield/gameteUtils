@@ -1,9 +1,10 @@
 #!/usr/bin/env perl
 
-# TODO: fix ref issues
-# TODO: two-tailed unselected probability
+# TODO: create module to reduce lots of duplicated code between here and unselectedTest.pl
+# TODO: two-tailed unselected probability ?
 # TODO: probability output: was %0.5f but adjust during output??
 # TODO: handle non-0/1 heterozygotes
+# DONE: fix ref issues
 # DONE: consistent allele ordering across pools
 # DONE: after the above, add allele frequencies
 # DONE: write out putative indel sites only with --indels
@@ -26,7 +27,7 @@ use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest
 use BinomialTest qw/ binomial_test /;
 
 my $o_fai_file;
-my $o_hets_file;       # $h will be file handle for $o_hets_file
+my $o_hetsites_file;       # $h will be file handle for $o_hetsites_file
 my $o_unselected_file; # $u will be file handle for $o_unselected_file
 my $o_unselected_test = 1;
 my $o_unselected_prob = 0.01;
@@ -45,23 +46,20 @@ my $o_log10_p = 1;
 my $o_sort_bases = 1;
 my $o_allsites = 1;
 
-my $n_homozygous = 0;
-my $o_max_p_val = 0.05;
-
 my $o_help;
 my $current_reference = ""; # the name of the current reference sequence
 my $N_references = 0; # the number of reference sequences seen
 my $N_coordinates = 0; # the total number of coordinates seen
 my $N_indels = 0; # total number of indels skipped
-my $o_indels = 0;
+my $o_indels = 1;
 my $indels;  # $indels is file handle for indels file
 my %INDELS;
 
 my $usage_short = "
-    $0 --fai reference.fa.fai --hets h.vcf --unselected u.pro --selected-1 s1.pro --selected-2 s2.pro
+    $0 --fai reference.fa.fai --hetsites h.vcf --unselected u.pro --selected-1 s1.pro --selected-2 s2.pro
 
         --fai FILE
-        --hets FILE
+        --hetsites FILE
         --unselected FILE
         --unselected-test FLOAT  [default $o_unselected_prob]
         --selected-1 FILE
@@ -72,6 +70,7 @@ my $usage_short = "
         --max-allele-3 FLOAT     [default $o_max_allele_3]
         --log10-p                [default $o_log10_p]
         --indels                 [default $o_indels]
+        --no-indels
         --allsites               [default $o_allsites]
         --sort-bases             [default $o_sort_bases]
         --no-sort-bases
@@ -88,7 +87,7 @@ NAME
 
 SYNOPSIS
 
-    $0 --fai ref.fa.fai --hets h.vcf --unselected u.pro --selected-1 s1.pro --selected-2 s2.pro
+    $0 --fai ref.fa.fai --hetsites h.vcf --unselected u.pro --selected-1 s1.pro --selected-2 s2.pro
 
 
 OPTIONS
@@ -96,7 +95,9 @@ OPTIONS
     --fai FILE    Fasta index file for reference, required to specify the order of
                   sequences in the VCF and profile files
 
-    --hets FILE   VCF-format file specifying heterozygous sites. Use care in
+    --hetsites FILE
+
+                  VCF-format file specifying heterozygous sites. Use care in
                   producing this file; for simplicity, this script only uses
                   presence-absence positional information from the file to
                   determine whether a site is heterozygous, it explicitly does
@@ -166,7 +167,9 @@ OPTIONS
 
     --log10-p     Output log10-d P values for two-pool test [default $o_log10_p]
 
-    --indels      Write apparent indels to an indels output file [default $o_indels]
+    --indels
+    --no-indels   Write (or don't) apparent indels to an indels output file.  If the
+                  output file cannot be created, this option is disabled [default $o_indels].
 
     --allsites    Show test result for all heterozygous sites, not just those
                   for which the unselected pool passes the unselected test
@@ -238,7 +241,7 @@ if (scalar(@ARGV) == 0) {
 
 GetOptions(
     "fai=s"               => \$o_fai_file,
-    "hets=s"              => \$o_hets_file,
+    "hetsites=s"          => \$o_hetsites_file,
     "unselected=s"        => \$o_unselected_file,
     "unselected-test=f"   => \$o_unselected_prob,
     "selected-1=s"        => \$o_selected_1_file,
@@ -248,6 +251,8 @@ GetOptions(
     "mincov=i"            => \$o_mincov,
     "max-allele-3=f"      => \$o_max_allele_3,
     "log10-p"             => \$o_log10_p,
+    "indels"              => \$o_indels,
+    "no-indels"           => sub { $o_indels = 0 },
     "allsites"            => \$o_allsites,
     "sort-bases"          => \$o_sort_bases,
     "no-sort-bases"       => sub { $o_sort_bases = 0 },
@@ -256,7 +261,7 @@ GetOptions(
 
 print_usage_and_exit() if $o_help 
                           or not $o_fai_file
-                          or not $o_hets_file
+                          or not $o_hetsites_file
                           or not $o_unselected_file
                           or not $o_selected_1_file
                           or not $o_selected_2_file;
@@ -284,18 +289,21 @@ sub open_possibly_gzipped($) {
     return $fh;
 }
 
-my $h = open_possibly_gzipped($o_hets_file);
+my $h = open_possibly_gzipped($o_hetsites_file);
 
 if ($o_indels) {
-    $o_indels = $o_hets_file . "_indels.txt";
-    open ($indels, ">", $o_indels) or die "cannot open indels output file '$o_indels': $!"; 
+    $o_indels = $o_hetsites_file . "_indels.txt";
+    if (! open ($indels, ">", $o_indels)) {
+        print STDERR "cannot open indels output file '$o_indels', disabling option\n"; 
+        $o_indels = 0;
+    }
 }
 
 my $u = open_possibly_gzipped($o_unselected_file);
 my $s1 = open_possibly_gzipped($o_selected_1_file);
 my $s2 = open_possibly_gzipped($o_selected_2_file);
 
-sub read_hets_line() {
+sub read_hetsites_line() {
     READ_LINE:
     my $l = <$h>;
     while ($l and $l =~ /^#/) {
@@ -303,7 +311,7 @@ sub read_hets_line() {
     }
     return () if ! $l;
     chomp $l;
-    #print STDERR "read_hets_line: '$l'\n";
+    #print STDERR "read_hetsites_line: '$l'\n";
     my @l = split /\t/, $l;
     if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
         ++$N_indels;
@@ -498,7 +506,7 @@ sub do_combined_test($$$$$) {
 
 my $config = "Starting hetTwoPool test
 fai file                  : $o_fai_file
-het sites                 : $o_hets_file
+het sites                 : $o_hetsites_file
 unselected                : $o_unselected_file
 selected 1                : $o_selected_1_file
 selected 2                : $o_selected_2_file
@@ -512,6 +520,7 @@ mincov                    : $o_mincov
 max-allele-3              : $o_max_allele_3
 
 log10-p                   : $o_log10_p
+indels                    : $o_indels
 allsites                  : $o_allsites
 indels                    : $o_indels
 sort-bases                : $o_sort_bases
@@ -522,7 +531,7 @@ $outconfig =~ s/^/#/mg;
 print STDERR $config;
 print STDOUT $outconfig;
 
-my @h = read_hets_line();  # CHROM POS REF ALT
+my @h = read_hetsites_line();  # CHROM POS REF ALT
 my @p = read_unselected_line();  # CHROM POS A C G T N
 my @s1 = read_selected_1_line();
 my @s2 = read_selected_2_line();
@@ -543,7 +552,7 @@ while (@h and @p and @s1 and @s2) {
             #my @result_two = do_twopool_test(\@s1, \@s2, $h[2], $h[3]); 
             ## result_two has 10 fields, last is test state
             my @result = do_combined_test(\@p, \@s1, \@s2, $h[2], $h[3]);
-            @h = read_hets_line();
+            @h = read_hetsites_line();
             @p = read_unselected_line();
             @s1 = read_selected_1_line();
             @s2 = read_selected_2_line();
@@ -554,7 +563,7 @@ while (@h and @p and @s1 and @s2) {
             #print STDOUT join("\t", @result), "\n";
             print_result(\@result);
         } elsif ($h[1] < $p[1]) {
-            @h = read_hets_line(); # advance hets file
+            @h = read_hetsites_line(); # advance hetsites file
         } elsif ($p[1] != $s1[1] or $p[1] != $s2[1]) {
             # sync up pools
             do {
@@ -567,14 +576,13 @@ while (@h and @p and @s1 and @s2) {
                 }
             } until ($p[1] == $s1[1] and $p[1] == $s2[1]);
         } elsif ($h[1] > $p[1]) {
-            # hets is ahead of the pools, and we know the pools are synced, so
-            # we know that this common pool site is not in hets check to see if
+            # hetsites is ahead of the pools, and we know the pools are synced, so
+            # we know that this common pool site is not in hetsites check to see if
             # we can treat it as a null site
-            if ($o_null_fraction > 0.0 and rand() < $o_null_fraction) {
+            if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
                 my @result = do_combined_test(\@p, \@s1, \@s2, undef, undef);
                 $result[5] = "null_$result[5]";
                 $result[12] = "null_$result[12]";
-                print STDOUT join("\t", @result), "\n";
                 print_result(\@result);
             }
             @p = read_unselected_line(); # advance pools
@@ -584,7 +592,7 @@ while (@h and @p and @s1 and @s2) {
             die "unknown condition involving positions";
         }
     } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
-        @h = read_hets_line(); # advance $h because wrong ref sequence
+        @h = read_hetsites_line(); # advance $h because wrong ref sequence
     } elsif ($REF_ORDER{$p[0]} != $REF_ORDER{$s1[0]} or $REF_ORDER{$p[0]} != $REF_ORDER{$s2[0]}) {
         # sync up pools
         do {
@@ -597,8 +605,8 @@ while (@h and @p and @s1 and @s2) {
             }
         } until ($REF_ORDER{$p[0]} == $REF_ORDER{$s1[0]} and $REF_ORDER{$p[0]} == $REF_ORDER{$s2[0]});
     } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
-        # hets is ahead of the pools, and we know the pools are synced, so
-        # we know that this common pool site is not in hets check to see if
+        # hetsites is ahead of the pools, and we know the pools are synced, so
+        # we know that this common pool site is not in hetsites check to see if
         # we can treat it as a null site
         if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
             my @result = do_combined_test(\@p, \@s1, \@s2, undef, undef);
