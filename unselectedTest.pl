@@ -18,8 +18,9 @@ use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest
 use BinomialTest qw/ binomial_test /;
 
 my $o_fai_file;
-my $o_hets_file;
-my $o_pool_file;
+my $o_hetsites_file;
+my $o_hetprofile_file;
+my $o_unselected_file;
 my $o_unselected_test = 1;
 my $o_unselected_prob = 0.01;
 my $o_null_fraction = 0.001;
@@ -52,7 +53,7 @@ NAME
 
 SYNOPSIS
 
-    $0 --fai reference.fa.fai --hets h.vcf --pool pool.pro
+    $0 --fai reference.fa.fai --hetsites h.vcf [ --hetprofile het.pro ] --unselected unselected.pro
 
 
 OPTIONS
@@ -60,7 +61,7 @@ OPTIONS
     --fai FILE              Fasta index file for reference, required to specify the order of
                             sequences in the VCF and profile files
 
-    --hets FILE             VCF-format file specifying heterozygous sites. Use care in producing
+    --hetsites FILE         VCF-format file specifying heterozygous sites. Use care in producing
                             this file; for simplicity, this script only uses presence-absence 
                             positional information from the file to determine whether a site is
                             heterozygous, it explicitly does *not* use any sort of genotype
@@ -73,8 +74,11 @@ OPTIONS
                             The ID isn't used and may be '.', but REF and ALT are used to check
                             the alleles in the unselected pool.
 
-    --pool FILE             Pool profile.  If this is produced from a pileup, it will contain
-                            all 
+    --hetprofile FILE       Profile produced from reads from individual used to call --hetsites
+                            VCF [OPTIONAL]
+
+    --unselected FILE       Unselected pool profile.  If this is produced from a pileup, it will 
+                            contain all sites having read coverage.
 
     --unselected-test FLOAT Test for deviation of pool allele frequency away from 1:1, using a
                             two-sided binomial test with expected frequency 0.5.
@@ -136,8 +140,8 @@ sub print_usage_and_exit {
 
 GetOptions(
     "fai=s"               => \$o_fai_file,
-    "hets=s"              => \$o_hets_file,
-    "pool=s"              => \$o_pool_file,
+    "hetsites=s"          => \$o_hetsites_file,
+    "pool=s"              => \$o_unselected_file,
     "unselected-test=f"   => \$o_unselected_prob,
     "null-fraction=f"     => \$o_null_fraction,
     "no-unselected-test"  => sub { $o_unselected_test = 0 },
@@ -148,7 +152,7 @@ GetOptions(
     "help|?"              => \$o_help,
 ) or print_usage_and_exit();
 
-print_usage_and_exit() if $o_help or not $o_fai_file or not $o_hets_file or not $o_pool_file;
+print_usage_and_exit() if $o_help or not $o_fai_file or not $o_hetsites_file or not $o_unselected_file;
 
 # fill reference sequence order hash from fai file
 my %REF_ORDER;
@@ -160,12 +164,12 @@ while (<$ref>) {
 }
 print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_file\n";
 
-open (my $h, "<", $o_hets_file) or die "cannot open hets file '$o_hets_file': $!";
-open (my $p, "<", $o_pool_file) or die "cannot open pool profile '$o_pool_file': $!";
-$o_indels = $o_hets_file . "_indels.txt";
+open (my $h, "<", $o_hetsites_file) or die "cannot open hetsites file '$o_hetsites_file': $!";
+open (my $p, "<", $o_unselected_file) or die "cannot open unselected profile '$o_unselected_file': $!";
+$o_indels = $o_hetsites_file . "_indels.txt";
 open (my $indels, ">", $o_indels) or die "cannot open indels output file '$o_indels': $!"; 
 
-sub read_hets_line() {
+sub read_hetsites_line() {
     READ_LINE:
     my $l = <$h>;
     while ($l and $l =~ /^#/) {
@@ -173,7 +177,7 @@ sub read_hets_line() {
     }
     return () if ! $l;
     chomp $l;
-    #print STDERR "read_hets_line: '$l'\n";
+    #print STDERR "read_hetsites_line: '$l'\n";
     my @l = split /\t/, $l;
     if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
         ++$N_indels;
@@ -239,9 +243,9 @@ sub do_unselected_test {
     return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_pass");
 }
 
-print STDERR "Starting unselected test with '$o_hets_file' and '$o_pool_file'\n";
+print STDERR "Starting unselected test with '$o_hetsites_file' and '$o_unselected_file'\n";
 
-my @h = read_hets_line();  # CHROM POS REF ALT
+my @h = read_hetsites_line();  # CHROM POS REF ALT
 my @p = read_pool_line();  # CHROM POS A C G T N
 
 while (@h and @p) {
@@ -249,16 +253,16 @@ while (@h and @p) {
         if ($h[1] == $p[1]) { # same position
             my @result = do_unselected_test(\@p, $h[2], $h[3]); 
             # result has 6 fields, last is test state
-            @h = read_hets_line();
+            @h = read_hetsites_line();
             @p = read_pool_line();
             next if $result[5] ne "binom_pass" and not $o_allsites;
             # prefix the test state with "het_" to show this was a called het site
             $result[5] = "het_$result[5]";
             print STDOUT join("\t", @result), "\n";
         } elsif ($h[1] < $p[1]) {
-            @h = read_hets_line(); # advance hets file
+            @h = read_hetsites_line(); # advance hetsites file
         } elsif ($h[1] > $p[1]) {
-            # hets is ahead of the pool, so we know that this pool site is not in hets
+            # hetsites is ahead of the pool, so we know that this pool site is not in hetsites
             # check to see if we can treat it as a null site
             if ($o_null_fraction > 0.0 and rand() < $o_null_fraction) {
                 my @result = do_unselected_test(\@p, undef, undef); 
@@ -270,7 +274,7 @@ while (@h and @p) {
             die "unknown condition involving positions";
         }
     } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
-        @h = read_hets_line(); # advance $h because wrong ref sequence
+        @h = read_hetsites_line(); # advance $h because wrong ref sequence
     } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
         if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
             my @result = do_unselected_test(\@p); 
