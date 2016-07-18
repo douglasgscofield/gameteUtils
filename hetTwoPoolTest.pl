@@ -520,7 +520,6 @@ mincov                    : $o_mincov
 max-allele-3              : $o_max_allele_3
 
 log10-p                   : $o_log10_p
-indels                    : $o_indels
 allsites                  : $o_allsites
 indels                    : $o_indels
 sort-bases                : $o_sort_bases
