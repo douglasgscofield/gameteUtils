@@ -11,7 +11,7 @@ use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest
 use BinomialTest;  # no export, use BinomialTest::binomial_test()
 
 
-# package stuff
+# package packaging
 
 use Exporter qw/ import /;
 our @EXPORT_OK = qw/ fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log10dot do_unselected_test /;
@@ -241,7 +241,7 @@ sub do_unselected_test {
 
     my $allele1 = $base[$d[3]->[1]];
     my $allele2 = $base[$d[2]->[1]];
-    my $otot = "unselected,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
+    my $otot = "unsel,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
 
     return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov")
         if ($cov == 0); # zero coverage
