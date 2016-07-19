@@ -151,8 +151,9 @@ OPTIONS
 
     --log10-p     Output log10-d P values for unselected tests [default $o_log10_p]
 
-    --indels      Write apparent indels to an indels output file [default $o_indels]
-    --no-indels
+    --indels
+    --no-indels   Write (or don't) apparent indels to an indels output file.  If the
+                  output file cannot be created, this option is disabled [default $o_indels].
 
     --indels-annotate
     --no-indels-annotate

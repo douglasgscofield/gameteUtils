@@ -169,6 +169,11 @@ OPTIONS
     --no-indels   Write (or don't) apparent indels to an indels output file.  If the
                   output file cannot be created, this option is disabled [default $o_indels].
 
+    --indels-annotate
+    --no-indels-annotate
+                  Annotate indels written above with quality, INFO and genotype
+                  columns from the input VCF [default $o_indels_annotate]
+
     --allsites    Show test result for all heterozygous sites, not just those
                   for which the unselected pool passes the unselected test
 
