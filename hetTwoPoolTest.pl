@@ -40,6 +40,7 @@ my $o_null_fraction = 0.000;
 
 my $o_log10_p = 1;
 our $o_sort_bases = 1;
+our $o_hets_genotype = 0;  # GameteUtils::do_unselected_test() results do not include genotype columns
 my $o_allsites = 1;
 
 my $o_help;
@@ -388,13 +389,10 @@ while (@h and @p and @s1 and @s2) {
         } elsif ($p[1] != $s1[1] or $p[1] != $s2[1]) {
             # sync up pools
             do {
-                if ($p[1] < $s1[1]) {
-                    @p = read_unselected_line();
-                } elsif ($s1[1] < $s2[1]) {
-                    @s1 = read_selected_1_line();
-                } elsif ($s2[1] < $p[1] or $s2[1] < $s1[1]) {
-                    @s2 = read_selected_2_line();
-                }
+                if    ($p[1]  < $s1[1]) { @p  = read_unselected_line(); }
+                elsif ($s1[1] < $s2[1]) { @s1 = read_selected_1_line(); }
+                elsif ($s2[1] < $p[1] or
+                       $s2[1] < $s1[1]) { @s2 = read_selected_2_line(); }
             } until ($p[1] == $s1[1] and $p[1] == $s2[1]);
         } elsif ($h[1] > $p[1]) {
             # hetsites is ahead of the pools, and we know the pools are synced, so
@@ -414,17 +412,16 @@ while (@h and @p and @s1 and @s2) {
         }
     } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
         @h = read_hetsites_line($h); # advance $h because wrong ref sequence
-    } elsif ($REF_ORDER{$p[0]} != $REF_ORDER{$s1[0]} or $REF_ORDER{$p[0]} != $REF_ORDER{$s2[0]}) {
+    } elsif ($REF_ORDER{$p[0]} != $REF_ORDER{$s1[0]} or
+             $REF_ORDER{$p[0]} != $REF_ORDER{$s2[0]}) {
         # sync up pools
         do {
-            if ($REF_ORDER{$p[0]} < $REF_ORDER{$s1[0]}) {
-                @p = read_unselected_line();
-            } elsif ($REF_ORDER{$s1[0]} < $REF_ORDER{$s2[0]}) {
-                @s1 = read_selected_1_line();
-            } elsif ($REF_ORDER{$s2[0]} < $REF_ORDER{$p[0]} or $REF_ORDER{$s2[0]} < $REF_ORDER{$s1[0]}) {
-                @s2 = read_selected_2_line();
-            }
-        } until ($REF_ORDER{$p[0]} == $REF_ORDER{$s1[0]} and $REF_ORDER{$p[0]} == $REF_ORDER{$s2[0]});
+            if    ($REF_ORDER{$p[0]}  < $REF_ORDER{$s1[0]}) { @p  = read_unselected_line(); }
+            elsif ($REF_ORDER{$s1[0]} < $REF_ORDER{$s2[0]}) { @s1 = read_selected_1_line(); }
+            elsif ($REF_ORDER{$s2[0]} < $REF_ORDER{$p[0]} or
+                   $REF_ORDER{$s2[0]} < $REF_ORDER{$s1[0]}) { @s2 = read_selected_2_line(); }
+        } until ($REF_ORDER{$p[0]} == $REF_ORDER{$s1[0]} and
+                 $REF_ORDER{$p[0]} == $REF_ORDER{$s2[0]});
     } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
         # hetsites is ahead of the pools, and we know the pools are synced, so
         # we know that this common pool site is not in hetsites check to see if

@@ -35,6 +35,7 @@ my $o_null_fraction = 0.000;
 
 my $o_log10_p = 1;
 our $o_sort_bases = 1;
+our $o_hets_genotype = 1;  # GameteUtils::do_unselected_test() includes genotype columns
 my $o_allsites = 1;
 
 my $o_help;
@@ -88,7 +89,6 @@ OPTIONS
                   sequences in the VCF and profile files
 
     --hetsites FILE
-
                   VCF-format file specifying heterozygous sites. Use care in
                   producing this file; for simplicity, this script only uses
                   presence-absence positional information from the file to
@@ -104,7 +104,6 @@ OPTIONS
                   used to check the alleles in the unselected pool.
 
     --hetprofile FILE
-
                   Profile base content for reads underlying hetsites VCF.  This
                   file is OPTIONAL.  If it is included, then an unselected test
                   is performed on the content of this file too, and those results
@@ -115,7 +114,6 @@ OPTIONS
     --unselected FILE   Profile base content for 'unselected' pool
  
     --unselected-test FLOAT
-
                   Test for deviation of 'unselected' pool allele frequency away
                   from 1:1, using a two-sided binomial test with expected
                   frequency 0.5.  This is applied to the pool specified with
@@ -133,12 +131,10 @@ OPTIONS
                   the unselected and selected pools [default $o_mincov].
 
     --max-allele-3 FLOAT
-
                   Maximum accepted frequency count for a 3rd allele, applied to
                   each of the unselected and selected pools [default $o_max_allele_3]
 
     --null-fraction FLOAT
-
                   For fraction FLOAT sites that are *not* called heterozygotes,
                   perform the unselected and selected tests as above.  Output
                   This fraction is also subject to the --mincov and
@@ -172,14 +168,16 @@ OPTIONS
 
 OUTPUT
 
-Six tab-separated columns:
+Eight tab-separated columns:
 
   1 reference
   2 position
-  3 unselected pool read coverage
-  4 unselected pool test description string
-  5 unselected pool probability
-  6 unselected pool test result
+  3 genotype from the hets VCF file
+  4 genotype quality from the hets VCF file
+  5 unselected pool read coverage
+  6 unselected pool test description string
+  7 unselected pool probability
+  8 unselected pool test result
 
 'Test result' contains one of the following, prefixed with 'het_' for a
 heterozygous site and 'null_' for a non-heterozygous site selected via
@@ -192,7 +190,7 @@ heterozygous site and 'null_' for a non-heterozygous site selected via
   binom_fail : the binomial test is less than --unselected-prob
   binom_pass : the binomial test is >= --unselected-prob
 
-If a --hetprofile file has been provided, then the output contains 10
+If a --hetprofile file has been provided, then the output contains 12
 tab-separated columns, with the unselected test columns (described above) moved
 to columns 7-10, and columns 3-6 now containing the results of an unselected
 test applied to the contents of the --hetprofile file.  No special prefix is
@@ -201,14 +199,16 @@ test still contains the 'het_' or 'null_' prefixes as described above.
 
   1 reference
   2 position
-  3 hetprofile read coverage
-  4 hetprofile test description string
-  5 hetprofile probability
-  6 hetprofile test result
-  7 unselected pool read coverage
-  8 unselected pool test description string
-  9 unselected pool probability
- 10 unselected pool test result
+  3 genotype from the hets VCF file
+  4 genotype quality from the hets VCF file
+  5 hetprofile read coverage
+  6 hetprofile test description string
+  7 hetprofile probability
+  8 hetprofile test result
+  9 unselected pool read coverage
+ 10 unselected pool test description string
+ 11 unselected pool probability
+ 12 unselected pool test result
 
 
 ";
@@ -277,25 +277,25 @@ sub read_hetprofile_line() { return read_profile_line($hp, "hetprofile"); }
 
 sub read_unselected_line() { return read_profile_line($u, "unselected"); }
 
-sub do_combined_test($$$$) {  # called if --hetprofile file given
-    my ($hp, $u, $h_ref, $h_alt) = @_;
-    my @result_hp = do_unselected_test($hp, $h_ref, $h_alt); 
-    # result_hp has 6 fields, last is test state
-    my @result_u = do_unselected_test($u, $h_ref, $h_alt); 
-    # result_u has 6 fields, last is test state
-    die "do_combined_test inconsistent ref/pos" if $result_hp[0] ne $result_u[0] or $result_hp[1] != $result_u[1];
+sub do_combined_test($$$$$) {  # called if --hetprofile file given
+    my ($hp, $u, $h_ref, $h_alt, $h_qual) = @_;
+    my @result_hp = do_unselected_test($hp, $h_ref, $h_alt, $h_qual); 
+    my @result_u = do_unselected_test($u, $h_ref, $h_alt, $h_qual); 
+    croak "do_combined_test inconsistent ref/pos" if $result_hp[0] ne $result_u[0] or $result_hp[1] != $result_u[1];
     # combined result has 
     #  1 reference
     #  2 position
-    #  3 hetprofile read coverage
-    #  4 hetprofile test description string
-    #  5 hetprofile probability
-    #  6 hetprofile test result
-    #  7 unselected pool read coverage
-    #  8 unselected pool test description string
-    #  9 unselected pool probability
-   #  10 unselected pool test result
-    return (@result_hp, @result_u[2..5]);
+    #  3 genotype from the hets VCF file
+    #  4 genotype quality from the hets VCF file
+    #  5 hetprofile read coverage
+    #  6 hetprofile test description string
+    #  7 hetprofile probability
+    #  8 hetprofile test result
+    #  9 unselected pool read coverage
+    # 10 unselected pool test description string
+    # 11 unselected pool probability
+    # 12 unselected pool test result
+    return (@result_hp, @result_u[4..7]);
 }
 
 
@@ -317,6 +317,7 @@ allsites                  : $o_allsites
 indels                    : $o_indels
 indels-annotate           : $o_indels_annotate
 sort-bases                : $o_sort_bases
+hets-genotype             : $o_hets_genotype
 
 ";
 my $outconfig = $config;
@@ -324,33 +325,33 @@ $outconfig =~ s/^/#/mg;
 print STDERR $config;
 print STDOUT $outconfig;
 
-my @h = read_hetsites_line($h);  # CHROM POS REF ALT
+my @h = read_hetsites_line($h);  # CHROM POS REF ALT QUAL
 my @p = read_unselected_line(); # CHROM POS A C G T N
 my @hp; @hp = read_hetprofile_line() if $o_hetprofile_file;
 
 sub print_result($) {  # do rounding, etc. for output
     my $r = shift;
-    # col 5 is always a probability even though its meaning shifts with --hetprofile
-    $r->[4] = log10dot($r->[4]) if $o_log10_p;
-    $r->[4] = rounddot($r->[4]);
+    # col 7 is always a probability even though its meaning shifts with --hetprofile
+    $r->[6] = log10dot($r->[6]) if $o_log10_p;
+    $r->[6] = rounddot($r->[6]);
     if ($o_hetprofile_file) {
-        $r->[8] = log10dot($r->[8]) if $o_log10_p;
-        $r->[8] = rounddot($r->[8]);
+        $r->[10] = log10dot($r->[10]) if $o_log10_p;
+        $r->[10] = rounddot($r->[10]);
     }
     print STDOUT join("\t", @$r), "\n";
 }
 
-if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
+if ($o_hetprofile_file) {  # --hetprofile file given, 12-column output
     while (@h and @p and @hp) {
         if ($h[0] eq $p[0] and $h[0] eq $hp[0]) { # same reference
             if ($h[1] == $p[1] and $h[1] == $hp[1]) { # same position
-                my @result = do_combined_test(\@hp, \@p, $h[2], $h[3]);
+                my @result = do_combined_test(\@hp, \@p, $h[2], $h[3], $h[4]);
                 @h = read_hetsites_line($h);
                 @p = read_unselected_line();
                 @hp = read_hetprofile_line();
-                next if $result[9] ne "binom_pass" and not $o_allsites;
+                next if $result[11] ne "binom_pass" and not $o_allsites;
                 # prefix the unselected test states with "het_" to show this was a called het site
-                $result[9] = "het_$result[9]";
+                $result[11] = "het_$result[11]";
                 #print STDOUT join("\t", @result), "\n";
                 print_result(\@result);
             } elsif ($h[1] < $p[1]) {
@@ -358,11 +359,8 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
             } elsif ($p[1] != $hp[1]) {
                 # sync up hetprofile and unselected pool
                 do {
-                    if ($p[1] < $hp[1]) {
-                        @p = read_unselected_line();
-                    } elsif ($hp[1] < $p[1]) {
-                        @hp = read_hetprofile_line();
-                    }
+                    if    ($p[1] < $hp[1]) { @p  = read_unselected_line(); }
+                    elsif ($p[1] > $hp[1]) { @hp = read_hetprofile_line(); }
                 } until ($p[1] == $hp[1]);
             } elsif ($h[1] > $p[1]) {
                 # hetsites is ahead of hetprofile and the unselected pools, and
@@ -370,25 +368,22 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
                 # site is not in hetsites. check to see if we can treat it as a
                 # null site
                 if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
-                    my @result = do_combined_test(\@hp, \@p, undef, undef);
-                    $result[9] = "null_$result[9]";
+                    my @result = do_combined_test(\@hp, \@p, undef, undef, undef);
+                    $result[11] = "null_$result[11]";
                     print_result(\@result);
                 }
                 @p = read_unselected_line(); # advance pools
                 @hp = read_hetprofile_line();
             } else {
-                die "unknown condition involving positions";
+                croak "unknown condition involving positions";
             }
         } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
             @h = read_hetsites_line($h); # advance $h because wrong ref sequence
         } elsif ($REF_ORDER{$p[0]} != $REF_ORDER{$hp[0]}) {
             # sync up hetprofile and unselected pool
             do {
-                if ($REF_ORDER{$p[0]} < $REF_ORDER{$hp[0]}) {
-                    @p = read_unselected_line();
-                } elsif ($REF_ORDER{$p[0]} > $REF_ORDER{$hp[0]}) {
-                    @hp = read_hetprofile_line();
-                }
+                if    ($REF_ORDER{$p[0]} < $REF_ORDER{$hp[0]}) { @p  = read_unselected_line(); }
+                elsif ($REF_ORDER{$p[0]} > $REF_ORDER{$hp[0]}) { @hp = read_hetprofile_line(); }
             } until ($REF_ORDER{$p[0]} == $REF_ORDER{$hp[0]});
         } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
             # hetsites is ahead of hetprofile and the unselected pools, and
@@ -396,27 +391,27 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
             # site is not in hetsites. check to see if we can treat it as a
             # null site
             if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
-                my @result = do_combined_test(\@hp, \@p, undef, undef);
-                $result[9] = "null_$result[9]";
+                my @result = do_combined_test(\@hp, \@p, undef, undef, undef);
+                $result[11] = "null_$result[11]";
                 print_result(\@result);
             }
             @p = read_unselected_line(); # advance pools
             @hp = read_hetprofile_line();
         } else {
-            die "unknown condition involving reference order";
+            croak "unknown condition involving reference order";
         }
     }
-} else {  # no --hetprofile file, 6-column output
+} else {  # no --hetprofile file, 8-column output
     while (@h and @p) {
         if ($h[0] eq $p[0]) { # same reference
             if ($h[1] == $p[1]) { # same position
-                my @result = do_unselected_test(\@p, $h[2], $h[3]); 
-                # result has 6 fields, last is test state
+                my @result = do_unselected_test(\@p, $h[2], $h[3], $h[4]); 
+                # result has 8 fields, 8th is test state
                 @h = read_hetsites_line($h);
                 @p = read_unselected_line();
-                next if $result[5] ne "binom_pass" and not $o_allsites;
+                next if $result[7] ne "binom_pass" and not $o_allsites;
                 # prefix the test state with "het_" to show this was a called het site
-                $result[5] = "het_$result[5]";
+                $result[7] = "het_$result[7]";
                 print_result(\@result);
             } elsif ($h[1] < $p[1]) {
                 @h = read_hetsites_line($h); # advance hetsites file
@@ -425,7 +420,7 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
                 # check to see if we can treat it as a null site
                 if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
                     my @result = do_unselected_test(\@p, undef, undef); 
-                    $result[5] = "null_$result[5]";
+                    $result[7] = "null_$result[7]";
                     print_result(\@result);
                 }
                 @p = read_unselected_line(); # now advance unselected file
@@ -436,8 +431,8 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
             @h = read_hetsites_line($h); # advance $h because wrong ref sequence
         } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
             if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
-                my @result = do_unselected_test(\@p); 
-                $result[5] = "null_$result[5]";
+                my @result = do_unselected_test(\@p, undef, undef); 
+                $result[7] = "null_$result[7]";
                 print_result(\@result);
             }
             @p = read_unselected_line(); # advance $p because wrong ref sequence

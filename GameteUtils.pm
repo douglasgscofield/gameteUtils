@@ -64,7 +64,7 @@ sub open_possibly_gzipped($) {
 # sub read_hetsites_line($)
 #
 # Argument 1: file handle to open hetsites VCF file
-# Return    : list containing het site info: CHROM POS REF ALT, with REF and ALT
+# Return    : list containing het site info: CHROM POS REF ALT QUAL, with REF and ALT
 #             switched if $main::o_sort_bases and REF is lexically smaller than ALT
 #
 # Writes indels to $main::indels file if appropriate options set in main script.
@@ -97,9 +97,9 @@ sub read_hetsites_line($) {
         }
         goto READ_LINE;
     }
-    # return CHROM POS REF ALT
     ($l[3], $l[4]) = ($l[4], $l[3]) if $main::o_sort_bases and $base{$l[3]} > $base{$l[4]};
-    return @l[(0,1,3,4)];
+    # return CHROM POS REF ALT QUAL
+    return @l[(0,1,3,4,5)];
 }
 
 
@@ -221,6 +221,7 @@ sub log10dot($) {
 # Argument 1: reference to list holding contents of profile line
 # Argument 2: reference base from het VCF [optional, may be undef]
 # Argument 3: alternate base from het VCF [optional, may be undef]
+# Argument 4: genotype quality from het VCF [optional, may be undef]
 # Return    : 6-element list containing results of the test
 #             0: reference
 #             1: position
@@ -228,27 +229,35 @@ sub log10dot($) {
 #             3: test description string
 #             4: unselected probability
 #             5: test result string
+# If $main::o_hets_genotype is set, then there are 8 elements in the
+# list and positions 2 and 3 are instead the het genotype and quality
+# as reported in the VCF
 #
 # Main script 'our' variables:
 #     $main::o_mincov
 #     $main::o_genotype
 #     $main::o_max_allele_3
 #     $main::o_unselected_prob
+#     $main::o_hets_genotype
 sub do_unselected_test {
-    my ($l, $h_ref, $h_alt) = @_;
+    my ($l, $h_ref, $h_alt, $h_qual) = @_;
     my @d = sorted_pool_counts($l);
-    my $cov = $d[2]->[0] + $d[3]->[0];
+    my $cov = $d[0]->[0] + $d[1]->[0] + $d[2]->[0] + $d[3]->[0];  # total coverage
 
     my $allele1 = $base[$d[3]->[1]];
     my $allele2 = $base[$d[2]->[1]];
     my $otot = "unsel,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
 
-    return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov")
+    my @prefix = ($l->[0], $l->[1]);
+    push @prefix, ("$allele1/$allele2", $h_qual) if $main::o_hets_genotype;
+    push @prefix, $cov;
+
+    return (@prefix, $otot, ".", "zerocov")
         if ($cov == 0); # zero coverage
 
     my $prob = BinomialTest::binomial_test($d[2]->[0], $cov);
 
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "mincov")
+    return (@prefix, $otot, $prob, "mincov")
         if ($cov < $main::o_mincov); # insufficient coverage
 
     if ($main::o_genotype and defined($h_ref) and defined($h_alt)) {
@@ -260,17 +269,17 @@ sub do_unselected_test {
         if (($h_ref ne $allele1 and $h_alt ne $allele2) and 
             ($h_ref ne $allele2 and $h_alt ne $allele1)) {
             $otot .= ",$h_ref/$h_alt";
-            return ($l->[0], $l->[1], $cov, $otot, $prob, "genotype");
+            return (@prefix, $otot, $prob, "genotype");
         }
     }
 
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "allele3")
+    return (@prefix, $otot, $prob, "allele3")
         if ($d[1]->[0] >= $cov * $main::o_max_allele_3); # allele 3 coverage too high
 
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_fail")
+    return (@prefix, $otot, $prob, "binom_fail")
         if ($prob < $main::o_unselected_prob); # effectively homozygous site
 
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_pass");
+    return (@prefix, $otot, $prob, "binom_pass");
 }
 
 
