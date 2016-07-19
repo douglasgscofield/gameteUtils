@@ -1,10 +1,11 @@
 #!/usr/bin/env perl
 
-# TODO: create module to reduce lots of duplicated code between here and unselectedTest.pl
+# TODO: create module to reduce lots of duplicated code between here and hetTwoPoolTest.pl
 # TODO: two-tailed unselected probability ?
 # TODO: probability output: was %0.5f but adjust during output??
 # TODO: handle non-0/1 heterozygotes
-# TODO: add usage of hetsites-reads profile
+# DONE: add usage of hetsites-reads profile
+# DONE: add --indels-annotate
 
 # Copyright (c) 2016 Douglas G. Scofield, Uppsala University
 # douglas.scofield@ebc.uu.se, douglasgscofield@gmail.com
@@ -14,22 +15,24 @@
 use strict;
 use warnings;
 use Carp;
-use POSIX qw/isdigit log10/;
+#use POSIX qw/isdigit log10/;
 use Getopt::Long;
 use List::Util;
 use FindBin;
-use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest
-use BinomialTest qw/ binomial_test /;
+use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest and/or GameteUtils
+#use BinomialTest qw/ binomial_test /;
+use GameteUtils qw/ fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log10dot do_unselected_test /;
+# multdot() not actually used here ...
 
 my $o_fai_file;
 my $o_hetsites_file;
 my $o_hetprofile_file;
 my $o_unselected_file;
-my $o_unselected_prob = 0.01;
+our $o_unselected_prob = 0.01;  # --unselected-test FLOAT
+our $o_mincov = 8; # 10   # --mincov INT
+our $o_genotype = 1;  # check for incompatible genotype, always done
+our $o_max_allele_3 = 0.1;  # --max-allele-3 FLOAT
 my $o_null_fraction = 0.000;
-my $o_mincov = 8; # 10
-my $o_genotype = 1;
-my $o_max_allele_3 = 0.1;
 
 my $o_log10_p = 1;
 my $o_sort_bases = 1;
@@ -39,10 +42,12 @@ my $o_help;
 my $current_reference = ""; # the name of the current reference sequence
 my $N_references = 0; # the number of reference sequences seen
 my $N_coordinates = 0; # the total number of coordinates seen
-my $N_indels = 0; # total number of indels skipped
-my $o_indels = 1;
-my $indels;  # $indels is file handle for indels file
-my %INDELS;
+our $o_digits = 7; # number of digits to round output
+our $N_indels = 0; # total number of indels skipped
+our $o_indels = 1; # produce file of indels
+our $o_indels_annotate = 1;  # annotate indels with quality, INFO and genotype columns from VCF
+our $indels;  # $indels is file handle for indels file
+our %INDELS;
 
 my $usage_short = "
     $0 --fai reference.fa.fai --hetsites h.vcf [ --hetprofile het.pro ] --unselected u.pro 
@@ -52,11 +57,14 @@ my $usage_short = "
         --hetprofile FILE
         --unselected FILE
         --unselected-test FLOAT  [default $o_unselected_prob]
-        --null-fraction FLOAT    [default $o_null_fraction]
         --mincov INT             [default $o_mincov]
         --max-allele-3 FLOAT     [default $o_max_allele_3]
+        --null-fraction FLOAT    [default $o_null_fraction]
         --log10-p                [default $o_log10_p]
         --indels                 [default $o_indels]
+        --no-indels
+        --indels-annotate        [default $o_indels_annotate]
+        --no-indels-annotate
         --allsites               [default $o_allsites]
         --sort-bases             [default $o_sort_bases]
         --no-sort-bases
@@ -122,6 +130,14 @@ OPTIONS
                   prefixed with 'het_' for each site that is a called
                   heterozygote.  [default $o_unselected_prob]
 
+    --mincov INT  Minimum read coverage to consider a site, applied to each of
+                  the unselected and selected pools [default $o_mincov].
+
+    --max-allele-3 FLOAT
+
+                  Maximum accepted frequency count for a 3rd allele, applied to
+                  each of the unselected and selected pools [default $o_max_allele_3]
+
     --null-fraction FLOAT
 
                   For fraction FLOAT sites that are *not* called heterozygotes,
@@ -132,19 +148,17 @@ OPTIONS
                   site tested as a result of this option.  [default
                   $o_null_fraction]
 
-    --mincov INT  Minimum read coverage to consider a site, applied to each of
-                  the unselected and selected pools [default $o_mincov].
-
-    --max-allele-3 FLOAT
-
-                  Maximum accepted frequency count for a 3rd allele, applied to
-                  each of the unselected and selected pools [default $o_max_allele_3]
-
   OTHER OPTIONS
 
-    --log10-p     Output log10-d P values for two-pool test [default $o_log10_p]
+    --log10-p     Output log10-d P values for unselected tests [default $o_log10_p]
 
     --indels      Write apparent indels to an indels output file [default $o_indels]
+    --no-indels
+
+    --indels-annotate
+    --no-indels-annotate
+                  Annotate indels written above with quality, INFO and genotype
+                  columns from the input VCF [default $o_indels_annotate]
 
     --allsites    Show test result for all heterozygous sites, not just those
                   for which the unselected pool passes the unselected test
@@ -216,6 +230,10 @@ GetOptions(
     "mincov=i"            => \$o_mincov,
     "max-allele-3=f"      => \$o_max_allele_3,
     "log10-p"             => \$o_log10_p,
+    "indels"              => \$o_indels,
+    "no-indels"           => sub { $o_indels = 0 },
+    "indels-annotate"     => \$o_indels_annotate,
+    "no-indels-annotate"  => sub { $o_indels_annotate = 0 },
     "allsites"            => \$o_allsites,
     "help|?"              => \$o_help,
 ) or print_usage_and_exit();
@@ -227,28 +245,30 @@ print_usage_and_exit() if $o_help
                           or not $o_hetsites_file
                           or not $o_unselected_file;
 
-my @base = qw/ A C G T /;
-my %base; $base{A} = 0; $base{C} = 1; $base{G} = 2; $base{T} = 3;
+$o_indels ||= $o_indels_annotate;
+
+#my @base = qw/ A C G T /;
+#my %base; $base{A} = 0; $base{C} = 1; $base{G} = 2; $base{T} = 3;
 
 # fill reference sequence order hash from fai file
-my %REF_ORDER;
-my $ref_index = 0;
-open (my $ref, "<", $o_fai_file) or croak "cannot open Fasta index file '$o_fai_file': $!";
-while (<$ref>) {
-    my @l = split /\t/;
-    $REF_ORDER{$l[0]} = ++$ref_index if not exists $REF_ORDER{$l[0]};
-}
+my %REF_ORDER = fill_ref_index($o_fai_file);
+#my $ref_index = 0;
+#open (my $ref, "<", $o_fai_file) or croak "cannot open Fasta index file '$o_fai_file': $!";
+#while (<$ref>) {
+#    my @l = split /\t/;
+#    $REF_ORDER{$l[0]} = ++$ref_index if not exists $REF_ORDER{$l[0]};
+#}
 print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_file\n";
 
-sub open_possibly_gzipped($) {
-    my ($file, $fh) = shift;
-    if ($file =~ /\.gz$/) {
-        open ($fh, "-|", "gzip -dc $file") or croak "cannot open '$file': $!";
-    } else {
-        open ($fh, "<", $file) or croak "cannot open '$file': $!";
-    }
-    return $fh;
-}
+#sub open_possibly_gzipped($) {
+#    my ($file, $fh) = shift;
+#    if ($file =~ /\.gz$/) {
+#        open ($fh, "-|", "gzip -dc $file") or croak "cannot open '$file': $!";
+#    } else {
+#        open ($fh, "<", $file) or croak "cannot open '$file': $!";
+#    }
+#    return $fh;
+#}
 
 my $h = open_possibly_gzipped($o_hetsites_file);
 
@@ -257,6 +277,7 @@ if ($o_indels) {
     if (! open ($indels, ">", $o_indels)) {
         carp "cannot open indels output file '$o_indels', disabling option\n"; 
         $o_indels = 0;
+        $o_indels_annotate = 0;
     }
 }
 
@@ -266,56 +287,63 @@ if ($o_hetprofile_file) {
     $hp = open_possibly_gzipped($o_hetprofile_file);
 }
 
-sub read_hetsites_line() {
-    READ_LINE:
-    my $l = <$h>;
-    while ($l and $l =~ /^#/) {
-        $l = <$h>;
-    }
-    return () if ! $l;
-    chomp $l;
-    #print STDERR "read_hetsites_line: '$l'\n";
-    my @l = split /\t/, $l;
-    if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
-        ++$N_indels;
-        ++$INDELS{"$l[0]:$l[1]"};
-        print { $indels } "INDEL\t", join("\t", @l[(0,1,3,4)]), "\n" if $o_indels;
-        goto READ_LINE;
-    }
-    # return CHROM POS REF ALT
-    return @l[(0,1,3,4)];
-}
+#sub read_hetsites_line($) {
+#    my $fh = shift;
+#    READ_LINE:
+#    my $l = <$fh>;
+#    while ($l and $l =~ /^#/) {
+#        $l = <$fh>;
+#    }
+#    return () if ! $l;
+#    chomp $l;
+#    #print STDERR "read_hetsites_line: '$l'\n";
+#    my @l = split /\t/, $l;
+#    if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
+#        ++$N_indels;
+#        ++$INDELS{"$l[0]:$l[1]"};  # mark this position as an indel
+#        if ($o_indels) {
+#            my @i = ("INDEL", @l[(0,1,3,4)]);
+#            push @i, @l[5,7,8,9] if $o_indels_annotate;
+#            print { $indels } join("\t", @i), "\n";
+#        }
+#        goto READ_LINE;
+#    }
+#    # return CHROM POS REF ALT
+#    return @l[(0,1,3,4)];
+#}
 
-sub read_profile_line($$) {
-    my ($fh, $tag) = @_;
-    my $l = <$fh>;
-    return () if ! $l;
-    chomp $l;
-    #print STDERR "read_profile_line:$tag: '$l'\n";
-    return split /\t/, $l;
-}
+#sub read_profile_line($$) {
+#    my ($fh, $tag) = @_;
+#    my $l = <$fh>;
+#    return () if ! $l;
+#    chomp $l;
+#    #print STDERR "read_profile_line:$tag: '$l'\n";
+#    return split /\t/, $l;
+#}
 
 sub read_hetprofile_line() { return read_profile_line($hp, "hetprofile"); }
 
 sub read_unselected_line() { return read_profile_line($u, "unselected"); }
 
-sub sorted_pool_counts($) {
-    my $l1 = shift;
-    my @d = ( [ $l1->[2], 0 ],   # A
-              [ $l1->[3], 1 ],   # C
-              [ $l1->[4], 2 ],   # G
-              [ $l1->[5], 3 ] ); # T
-    return sort { $a->[0] <=> $b->[0] } @d;
-}
-sub rounddot($) {
-    my $f = shift;
-    return $f eq "." ? $f : sprintf("%.7f", $f);
-}
-sub multdot($$) {
-    my ($p1, $p2) = @_;
-    my $ans = ($p1 eq "." or $p2 eq ".") ? "." : ($p1 * $p2);
-    return $ans;
-}
+#sub sorted_pool_counts($) {
+#    my $l1 = shift;
+#    my @d = ( [ $l1->[2], 0 ],   # A
+#              [ $l1->[3], 1 ],   # C
+#              [ $l1->[4], 2 ],   # G
+#              [ $l1->[5], 3 ] ); # T
+#    return sort { $a->[0] <=> $b->[0] } @d;
+#}
+
+#sub rounddot($) {
+#    my $f = shift;
+#    return $f eq "." ? $f : sprintf("%.7f", $f);
+#}
+
+#sub multdot($$) {
+#    my ($p1, $p2) = @_;
+#    my $ans = ($p1 eq "." or $p2 eq ".") ? "." : ($p1 * $p2);
+#    return $ans;
+#}
 
 # for do_unselected_test(), output is:
 # 0: reference
@@ -324,44 +352,44 @@ sub multdot($$) {
 # 3: test description string
 # 4: unselected probability
 # 5: test result string
-sub do_unselected_test {
-    my ($l, $h_ref, $h_alt) = @_;
-    my @d = sorted_pool_counts($l);
-    my $cov = $d[2]->[0] + $d[3]->[0];
-
-    my $allele1 = $base[$d[3]->[1]];
-    my $allele2 = $base[$d[2]->[1]];
-    my $otot = "binom,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
-
-    return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov")
-        if ($cov == 0); # zero coverage
-
-    my $prob = binomial_test($d[2]->[0], $cov);
-
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "mincov")
-        if ($cov < $o_mincov); # insufficient coverage
-
-    if ($o_genotype and defined($h_ref) and defined($h_alt)) {
-        # check for incompatible genotype
-
-        carp "unreasonable ref '$h_ref' and alt '$h_alt' alleles"
-            if !defined($base{$h_ref}) or !defined($base{$h_alt});
-
-        if (($h_ref ne $allele1 and $h_alt ne $allele2) and 
-            ($h_ref ne $allele2 and $h_alt ne $allele1)) {
-            $otot .= ",$h_ref/$h_alt";
-            return ($l->[0], $l->[1], $cov, $otot, $prob, "genotype");
-        }
-    }
-
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "allele3")
-        if ($d[1]->[0] >= $cov * $o_max_allele_3); # allele 3 coverage too high
-
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_fail")
-        if ($prob < $o_unselected_prob); # effectively homozygous site
-
-    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_pass");
-}
+#sub do_unselected_test {
+#    my ($l, $h_ref, $h_alt) = @_;
+#    my @d = sorted_pool_counts($l);
+#    my $cov = $d[2]->[0] + $d[3]->[0];
+#
+#    my $allele1 = $GameteUtils::base[$d[3]->[1]];
+#    my $allele2 = $GameteUtils::base[$d[2]->[1]];
+#    my $otot = "binom,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
+#
+#    return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov")
+#        if ($cov == 0); # zero coverage
+#
+#    my $prob = binomial_test($d[2]->[0], $cov);
+#
+#    return ($l->[0], $l->[1], $cov, $otot, $prob, "mincov")
+#        if ($cov < $o_mincov); # insufficient coverage
+#
+#    if ($o_genotype and defined($h_ref) and defined($h_alt)) {
+#        # check for incompatible genotype
+#
+#        carp "unreasonable ref '$h_ref' and alt '$h_alt' alleles"
+#            if !defined($GameteUtils::base{$h_ref}) or !defined($GameteUtils::base{$h_alt});
+#
+#        if (($h_ref ne $allele1 and $h_alt ne $allele2) and 
+#            ($h_ref ne $allele2 and $h_alt ne $allele1)) {
+#            $otot .= ",$h_ref/$h_alt";
+#            return ($l->[0], $l->[1], $cov, $otot, $prob, "genotype");
+#        }
+#    }
+#
+#    return ($l->[0], $l->[1], $cov, $otot, $prob, "allele3")
+#        if ($d[1]->[0] >= $cov * $o_max_allele_3); # allele 3 coverage too high
+#
+#    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_fail")
+#        if ($prob < $o_unselected_prob); # effectively homozygous site
+#
+#    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_pass");
+#}
 
 sub do_combined_test($$$$) {  # called if --hetprofile file given
     my ($hp, $u, $h_ref, $h_alt) = @_;
@@ -401,6 +429,7 @@ max-allele-3              : $o_max_allele_3
 log10-p                   : $o_log10_p
 allsites                  : $o_allsites
 indels                    : $o_indels
+indels-annotate           : $o_indels_annotate
 sort-bases                : $o_sort_bases
 
 ";
@@ -409,18 +438,18 @@ $outconfig =~ s/^/#/mg;
 print STDERR $config;
 print STDOUT $outconfig;
 
-my @h = read_hetsites_line();  # CHROM POS REF ALT
+my @h = read_hetsites_line($h);  # CHROM POS REF ALT
 my @p = read_unselected_line(); # CHROM POS A C G T N
 my @hp; @hp = read_hetprofile_line() if $o_hetprofile_file;
 
 sub print_result($) {  # do rounding, etc. for output
     my $r = shift;
     # col 5 is always a probability even though its meaning shifts with --hetprofile
-    $r->[4] = log10($r->[4]) if $r->[4] ne "." and $o_log10_p;
-    $r->[4] = sprintf("%.7f", $r->[4]) if $r->[4] ne ".";
+    $r->[4] = log10dot($r->[4]) if $o_log10_p;
+    $r->[4] = rounddot($r->[4]);
     if ($o_hetprofile_file) {
-        $r->[8] = log10($r->[8]) if $r->[8] ne "." and $o_log10_p;
-        $r->[8] = sprintf("%.7f", $r->[8]) if $r->[8] ne ".";
+        $r->[8] = log10dot($r->[8]) if $o_log10_p;
+        $r->[8] = rounddot($r->[8]);
     }
     print STDOUT join("\t", @$r), "\n";
 }
@@ -430,7 +459,7 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
         if ($h[0] eq $p[0] and $h[0] eq $hp[0]) { # same reference
             if ($h[1] == $p[1] and $h[1] == $hp[1]) { # same position
                 my @result = do_combined_test(\@hp, \@p, $h[2], $h[3]);
-                @h = read_hetsites_line();
+                @h = read_hetsites_line($h);
                 @p = read_unselected_line();
                 @hp = read_hetprofile_line();
                 next if $result[9] ne "binom_pass" and not $o_allsites;
@@ -439,7 +468,7 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
                 #print STDOUT join("\t", @result), "\n";
                 print_result(\@result);
             } elsif ($h[1] < $p[1]) {
-                @h = read_hetsites_line(); # advance hetsites file
+                @h = read_hetsites_line($h); # advance hetsites file
             } elsif ($p[1] != $hp[1]) {
                 # sync up hetprofile and unselected pool
                 do {
@@ -465,7 +494,7 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
                 die "unknown condition involving positions";
             }
         } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
-            @h = read_hetsites_line(); # advance $h because wrong ref sequence
+            @h = read_hetsites_line($h); # advance $h because wrong ref sequence
         } elsif ($REF_ORDER{$p[0]} != $REF_ORDER{$hp[0]}) {
             # sync up hetprofile and unselected pool
             do {
@@ -497,14 +526,14 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
             if ($h[1] == $p[1]) { # same position
                 my @result = do_unselected_test(\@p, $h[2], $h[3]); 
                 # result has 6 fields, last is test state
-                @h = read_hetsites_line();
+                @h = read_hetsites_line($h);
                 @p = read_unselected_line();
                 next if $result[5] ne "binom_pass" and not $o_allsites;
                 # prefix the test state with "het_" to show this was a called het site
                 $result[5] = "het_$result[5]";
                 print_result(\@result);
             } elsif ($h[1] < $p[1]) {
-                @h = read_hetsites_line(); # advance hetsites file
+                @h = read_hetsites_line($h); # advance hetsites file
             } elsif ($h[1] > $p[1]) {
                 # hetsites is ahead of the pool, so we know that this pool site is not in hetsites
                 # check to see if we can treat it as a null site
@@ -518,7 +547,7 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 10-column output
                 croak "unknown condition involving positions";
             }
         } elsif ($REF_ORDER{$h[0]} < $REF_ORDER{$p[0]}) {
-            @h = read_hetsites_line(); # advance $h because wrong ref sequence
+            @h = read_hetsites_line($h); # advance $h because wrong ref sequence
         } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
             if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
                 my @result = do_unselected_test(\@p); 
