@@ -419,7 +419,7 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 12-column output
                 # hetsites is ahead of the pool, so we know that this pool site is not in hetsites
                 # check to see if we can treat it as a null site
                 if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
-                    my @result = do_unselected_test(\@p, undef, undef); 
+                    my @result = do_unselected_test(\@p, undef, undef, undef); 
                     $result[7] = "null_$result[7]";
                     print_result(\@result);
                 }
@@ -431,7 +431,7 @@ if ($o_hetprofile_file) {  # --hetprofile file given, 12-column output
             @h = read_hetsites_line($h); # advance $h because wrong ref sequence
         } elsif ($REF_ORDER{$h[0]} > $REF_ORDER{$p[0]}) {
             if ($o_null_fraction > 0.0 and !$INDELS{"$p[0]:$p[1]"} and rand() < $o_null_fraction) {
-                my @result = do_unselected_test(\@p, undef, undef); 
+                my @result = do_unselected_test(\@p, undef, undef, undef); 
                 $result[7] = "null_$result[7]";
                 print_result(\@result);
             }
