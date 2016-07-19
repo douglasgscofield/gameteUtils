@@ -1,9 +1,9 @@
 #!/usr/bin/env perl
 
-# TODO: create module to reduce lots of duplicated code between here and hetTwoPoolTest.pl
 # TODO: two-tailed unselected probability ?
 # TODO: probability output: was %0.5f but adjust during output??
 # TODO: handle non-0/1 heterozygotes
+# DONE: create module to reduce lots of duplicated code between here and hetTwoPoolTest.pl
 # DONE: add usage of hetsites-reads profile
 # DONE: add --indels-annotate
 
@@ -15,15 +15,14 @@
 use strict;
 use warnings;
 use Carp;
-#use POSIX qw/isdigit log10/;
 use Getopt::Long;
 use List::Util;
 use FindBin;
 use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest and/or GameteUtils
-#use BinomialTest qw/ binomial_test /;
 use GameteUtils qw/ fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log10dot do_unselected_test /;
-# multdot() not actually used here ...
+# multdot() not actually used in this file ...
 
+# 'our' variables below are also used within the GameteUtils package
 my $o_fai_file;
 my $o_hetsites_file;
 my $o_hetprofile_file;
@@ -35,7 +34,7 @@ our $o_max_allele_3 = 0.1;  # --max-allele-3 FLOAT
 my $o_null_fraction = 0.000;
 
 my $o_log10_p = 1;
-my $o_sort_bases = 1;
+our $o_sort_bases = 1;
 my $o_allsites = 1;
 
 my $o_help;
@@ -214,10 +213,17 @@ test still contains the 'het_' or 'null_' prefixes as described above.
 ";
 
 sub print_usage_and_exit {
+    my $x = shift;
     my $msg = join(" ", @_);
     print "$msg\n" if $msg;
     print $usage;
-    exit 0;
+    $x ||= 0;
+    exit $x;
+}
+
+if (scalar(@ARGV) == 0) {
+    print $usage_short;
+    exit 1;
 }
 
 GetOptions(
@@ -236,39 +242,18 @@ GetOptions(
     "no-indels-annotate"  => sub { $o_indels_annotate = 0 },
     "allsites"            => \$o_allsites,
     "help|?"              => \$o_help,
-) or print_usage_and_exit();
+) or print_usage_and_exit(1);
 
-print_usage_and_exit() if $o_help or not $o_fai_file or not $o_hetsites_file or not $o_unselected_file;
-
-print_usage_and_exit() if $o_help 
+print_usage_and_exit(1) if $o_help 
                           or not $o_fai_file
                           or not $o_hetsites_file
                           or not $o_unselected_file;
 
 $o_indels ||= $o_indels_annotate;
 
-#my @base = qw/ A C G T /;
-#my %base; $base{A} = 0; $base{C} = 1; $base{G} = 2; $base{T} = 3;
-
 # fill reference sequence order hash from fai file
 my %REF_ORDER = fill_ref_index($o_fai_file);
-#my $ref_index = 0;
-#open (my $ref, "<", $o_fai_file) or croak "cannot open Fasta index file '$o_fai_file': $!";
-#while (<$ref>) {
-#    my @l = split /\t/;
-#    $REF_ORDER{$l[0]} = ++$ref_index if not exists $REF_ORDER{$l[0]};
-#}
 print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_file\n";
-
-#sub open_possibly_gzipped($) {
-#    my ($file, $fh) = shift;
-#    if ($file =~ /\.gz$/) {
-#        open ($fh, "-|", "gzip -dc $file") or croak "cannot open '$file': $!";
-#    } else {
-#        open ($fh, "<", $file) or croak "cannot open '$file': $!";
-#    }
-#    return $fh;
-#}
 
 my $h = open_possibly_gzipped($o_hetsites_file);
 
@@ -287,109 +272,9 @@ if ($o_hetprofile_file) {
     $hp = open_possibly_gzipped($o_hetprofile_file);
 }
 
-#sub read_hetsites_line($) {
-#    my $fh = shift;
-#    READ_LINE:
-#    my $l = <$fh>;
-#    while ($l and $l =~ /^#/) {
-#        $l = <$fh>;
-#    }
-#    return () if ! $l;
-#    chomp $l;
-#    #print STDERR "read_hetsites_line: '$l'\n";
-#    my @l = split /\t/, $l;
-#    if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
-#        ++$N_indels;
-#        ++$INDELS{"$l[0]:$l[1]"};  # mark this position as an indel
-#        if ($o_indels) {
-#            my @i = ("INDEL", @l[(0,1,3,4)]);
-#            push @i, @l[5,7,8,9] if $o_indels_annotate;
-#            print { $indels } join("\t", @i), "\n";
-#        }
-#        goto READ_LINE;
-#    }
-#    # return CHROM POS REF ALT
-#    return @l[(0,1,3,4)];
-#}
-
-#sub read_profile_line($$) {
-#    my ($fh, $tag) = @_;
-#    my $l = <$fh>;
-#    return () if ! $l;
-#    chomp $l;
-#    #print STDERR "read_profile_line:$tag: '$l'\n";
-#    return split /\t/, $l;
-#}
-
 sub read_hetprofile_line() { return read_profile_line($hp, "hetprofile"); }
 
 sub read_unselected_line() { return read_profile_line($u, "unselected"); }
-
-#sub sorted_pool_counts($) {
-#    my $l1 = shift;
-#    my @d = ( [ $l1->[2], 0 ],   # A
-#              [ $l1->[3], 1 ],   # C
-#              [ $l1->[4], 2 ],   # G
-#              [ $l1->[5], 3 ] ); # T
-#    return sort { $a->[0] <=> $b->[0] } @d;
-#}
-
-#sub rounddot($) {
-#    my $f = shift;
-#    return $f eq "." ? $f : sprintf("%.7f", $f);
-#}
-
-#sub multdot($$) {
-#    my ($p1, $p2) = @_;
-#    my $ans = ($p1 eq "." or $p2 eq ".") ? "." : ($p1 * $p2);
-#    return $ans;
-#}
-
-# for do_unselected_test(), output is:
-# 0: reference
-# 1: position
-# 2: read coverage
-# 3: test description string
-# 4: unselected probability
-# 5: test result string
-#sub do_unselected_test {
-#    my ($l, $h_ref, $h_alt) = @_;
-#    my @d = sorted_pool_counts($l);
-#    my $cov = $d[2]->[0] + $d[3]->[0];
-#
-#    my $allele1 = $GameteUtils::base[$d[3]->[1]];
-#    my $allele2 = $GameteUtils::base[$d[2]->[1]];
-#    my $otot = "binom,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
-#
-#    return ($l->[0], $l->[1], $cov, $otot, ".", "zerocov")
-#        if ($cov == 0); # zero coverage
-#
-#    my $prob = binomial_test($d[2]->[0], $cov);
-#
-#    return ($l->[0], $l->[1], $cov, $otot, $prob, "mincov")
-#        if ($cov < $o_mincov); # insufficient coverage
-#
-#    if ($o_genotype and defined($h_ref) and defined($h_alt)) {
-#        # check for incompatible genotype
-#
-#        carp "unreasonable ref '$h_ref' and alt '$h_alt' alleles"
-#            if !defined($GameteUtils::base{$h_ref}) or !defined($GameteUtils::base{$h_alt});
-#
-#        if (($h_ref ne $allele1 and $h_alt ne $allele2) and 
-#            ($h_ref ne $allele2 and $h_alt ne $allele1)) {
-#            $otot .= ",$h_ref/$h_alt";
-#            return ($l->[0], $l->[1], $cov, $otot, $prob, "genotype");
-#        }
-#    }
-#
-#    return ($l->[0], $l->[1], $cov, $otot, $prob, "allele3")
-#        if ($d[1]->[0] >= $cov * $o_max_allele_3); # allele 3 coverage too high
-#
-#    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_fail")
-#        if ($prob < $o_unselected_prob); # effectively homozygous site
-#
-#    return ($l->[0], $l->[1], $cov, $otot, $prob, "binom_pass");
-#}
 
 sub do_combined_test($$$$) {  # called if --hetprofile file given
     my ($hp, $u, $h_ref, $h_alt) = @_;
