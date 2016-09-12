@@ -5,23 +5,89 @@ package GameteUtils;
 use strict;
 use warnings;
 use Carp;
-use POSIX;  # no export, use POSIX::log10()
+use POSIX;  # nothing exported, use POSIX::log10()
 use FindBin;
+#use Math::Counting;
+#use bigrat
 use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest
-use BinomialTest;  # no export, use BinomialTest::binomial_test()
+use BinomialTest;  # nothing exported, use BinomialTest::binomial_test()
+
+# copied from Math::Counting, which has the unwanted (for now) side effect of
+# pulling in Math::BigInt. Used by choose().
+sub combination {
+    my( $n, $k ) = @_;
+    return unless defined $n && $n =~ /^\d+$/ && defined $k && $k =~ /^\d+$/;
+    my $product = 1;
+    while( $k > 0 ) {
+        $product *= $n--;
+        $product /= $k--;
+    }
+    return $product;
+}
 
 
 # package packaging
 
 use Exporter qw/ import /;
-our @EXPORT_OK = qw/ fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log10dot do_unselected_test /;
+our @EXPORT_OK = qw/ @base_a %base_h log0 choose fill_ref_lengths fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log0dot log10dot do_unselected_test /;
 
 
 # package contents
 
 
-our @base = qw/ A C G T /;
-our %base = ( A => 0, C => 1, G => 2, T => 3 );
+our @base_a = qw/ A C G T /;
+our %base_h = ( A => 0, C => 1, G => 2, T => 3 );
+
+# use this when log() will return -inf, make sure the multiplier in the likelihood function
+# can be 0 if this is the case
+sub log0($) {
+    my $z = shift;
+    return $z > 0 ? log($z) : 0;
+}
+
+# sub choose($$)
+#
+# Compute 'n choose k' or 'nCk', number of ways k items can be chosen from n
+# total item without replacement.  '10 choose 10' is 1, '10 choose 9' is 10
+#
+# Argument 1: n, total number of things
+# Argument 2: k, number of things at a time
+# Return    : Number of unique ways k items can be chosen from n
+#
+# Main script 'our' variables: NONE
+my $choose_n;
+my @choose_pre;
+sub choose($$) {
+    my ($n, $k, $ans) = @_;
+    if (not defined($choose_n) or $n != $choose_n) {
+        $choose_n = $n;
+        @choose_pre = ();
+        #$choose_pre[$k] = Math::Counting::combination($n, $k);
+        $choose_pre[$k] = combination($n, $k);
+    } elsif (not defined($choose_pre[$k])) {
+        #$choose_pre[$k] = Math::Counting::combination($n, $k);
+        $choose_pre[$k] = combination($n, $k);
+    }
+    return $choose_pre[$k];
+}
+
+# sub fill_ref_lengths($)
+#
+# Argument 1: Fasta index (.fai) filename to open
+# Return    : hash filled with reference sequence lengths (list context), or
+#             reference to this hash (scalar context)
+#
+# Main script 'our' variables: NONE
+sub fill_ref_lengths($) {
+    my $fai_file = shift;
+    my %REF_LENGTHS;
+    open (my $ref, "<", $fai_file) or croak "cannot open Fasta index file '$fai_file': $!";
+    while (<$ref>) {
+        my @l = split /\t/;
+        $REF_LENGTHS{$l[0]} = $l[1];
+    }
+    return wantarray ? %REF_LENGTHS : \%REF_LENGTHS;
+}
 
 
 # sub fill_ref_index($)
@@ -52,6 +118,7 @@ sub fill_ref_index($) {
 # Main script 'our' variables: NONE
 sub open_possibly_gzipped($) {
     my ($file, $fh) = shift;
+    -e $file or croak "cannot find '$file': $!";
     if ($file =~ /\.gz$/) {
         open ($fh, "-|", "gzip -dc $file") or croak "cannot open '$file': $!";
     } else {
@@ -97,7 +164,7 @@ sub read_hetsites_line($) {
         }
         goto READ_LINE;
     }
-    ($l[3], $l[4]) = ($l[4], $l[3]) if $main::o_sort_bases and $base{$l[3]} > $base{$l[4]};
+    ($l[3], $l[4]) = ($l[4], $l[3]) if defined($main::o_sort_bases) and $main::o_sort_bases and $base_h{$l[3]} > $base_h{$l[4]};
     # return CHROM POS REF ALT QUAL
     return @l[(0,1,3,4,5)];
 }
@@ -107,7 +174,7 @@ sub read_hetsites_line($) {
 #
 # Argument 1: file handle to open profile file
 # Argument 2: tag string to apply to output messages
-# Return    : list containing profile line contents, CHROM POS A C G T [N]
+# Return    : list containing profile line contents, CHROM POS A C G T
 #
 # Main script 'our' variables: NONE
 sub read_profile_line($$) {
@@ -142,7 +209,7 @@ sub sorted_pool_counts($) {
               [ $l1->[4], 2 ],   # G
               [ $l1->[5], 3 ] ); # T
     @d = sort { $a->[0] <=> $b->[0] } @d;
-    ($d[2], $d[3]) = ($d[3], $d[2]) if $main::o_sort_bases and $d[3]->[1] > $d[2]->[1];
+    ($d[2], $d[3]) = ($d[3], $d[2]) if defined($main::o_sort_bases) and $main::o_sort_bases and $d[3]->[1] > $d[2]->[1];
     return @d;
 }
 
@@ -171,22 +238,24 @@ sub sorted_twopool_counts($$) {
               [ $l1->[4], $l2->[4], $l1->[4] + $l2->[4], 2 ],   # G
               [ $l1->[5], $l2->[5], $l1->[5] + $l2->[5], 3 ] ); # T
     @d = sort { $a->[2] <=> $b->[2] } @d;
-    ($d[2], $d[3]) = ($d[3], $d[2]) if $main::o_sort_bases and $d[2]->[3] < $d[3]->[3];
+    ($d[2], $d[3]) = ($d[3], $d[2]) if defined($main::o_sort_bases) and $main::o_sort_bases and $d[3]->[3] > $d[2]->[3];
     return @d;
 }
 
 
-# sub rounddot($)
+# sub rounddot
 #
 # Argument 1: floating point value, or "."
+# Argument 2: digits to round to, or $main::o_digits if not supplied
 # Return    : argument rounded to $main::o_digits, or "."
 #             if argument was "."
 #
 # Main script 'our' variables:
 #     $main::o_digits
-sub rounddot($) {
-    my $f = shift;
-    return $f eq "." ? $f : sprintf("%.".$main::o_digits."f", $f);
+sub rounddot {
+    my ($f, $d) = @_;
+    $d = $main::o_digits if not defined($d);
+    return $f eq "." ? $f : sprintf("%.".$d."f", $f);
 }
 
 
@@ -201,6 +270,18 @@ sub multdot($$) {
     my ($p1, $p2) = @_;
     my $ans = ($p1 eq "." or $p2 eq ".") ? "." : ($p1 * $p2);
     return $ans;
+}
+
+
+# sub log0dot($)
+#
+# Argument 1: floating point value, or "."
+# Return    : argument with log0() applied, or "." if argument was "."
+#
+# Main script 'our' variables: NONE
+sub log0dot($) {
+    my $f = shift;
+    return $f eq "." ? $f : log0($f);
 }
 
 
@@ -244,8 +325,8 @@ sub do_unselected_test {
     my @d = sorted_pool_counts($l);
     my $cov = $d[0]->[0] + $d[1]->[0] + $d[2]->[0] + $d[3]->[0];  # total coverage
 
-    my $allele1 = $base[$d[3]->[1]];
-    my $allele2 = $base[$d[2]->[1]];
+    my $allele1 = $base_a[$d[3]->[1]];
+    my $allele2 = $base_a[$d[2]->[1]];
     my $otot = "unsel,$allele1/$allele2:$d[3]->[0]/$d[2]->[0]";
 
     my @prefix = ($l->[0], $l->[1]);
@@ -264,7 +345,7 @@ sub do_unselected_test {
         # check for incompatible genotype
 
         carp "unreasonable ref '$h_ref' and alt '$h_alt' alleles"
-            if !defined($base{$h_ref}) or !defined($base{$h_alt});
+            if !defined($base_h{$h_ref}) or !defined($base_h{$h_alt});
 
         if (($h_ref ne $allele1 and $h_alt ne $allele2) and 
             ($h_ref ne $allele2 and $h_alt ne $allele1)) {
