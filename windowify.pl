@@ -24,6 +24,20 @@ my $N_zerosites = 0;
 my $o_fai_file;
 my $o_input_file;
 
+my $usage = "$0 [options] --fai fasta.fa.fai --input FILE
+
+OPTIONS:
+
+    --fai FILE        Fasta index file (samtools faidx FASTA.fa) [default $o_fai_file]
+    --input FILE      hetPoolLikelihoods.pl output file [default $o_input_file]
+    --size INT        Window size in bp [default $o_windowsize]
+    --overlap INT     Window overlap in bp [default $o_windowoverlap]
+    --minsize INT     Minimum window size [default $o_windowminsize]
+    --max-windows INT Maximum number of windows to output [debugging, default $o_max_windows]
+    --mincov INT      Minimum total coverage required to keep a site [default $o_mincov]
+    --minsites INT    Minimum number of valid sites required to keep a window [default $o_minsites]
+";
+
 GetOptions(
     "fai=s"         => \$o_fai_file,
     "input=s"       => \$o_input_file,
@@ -33,7 +47,7 @@ GetOptions(
     "max-windows=i" => \$o_max_windows,
     "mincov=i"      => \$o_mincov,
     "minsites=i"    => \$o_minsites,
-) or exit(1);
+) or do { say STDERR $usage; exit(1); };
 
 # fill reference sequence order hash from fai file
 my %REF_LENGTHS = fill_ref_lengths($o_fai_file);
@@ -41,7 +55,7 @@ say STDERR "Found ".scalar(keys(%REF_LENGTHS))." reference sequences in $o_fai_f
 
 croak "Please use sensible window and overlap sizes" if $o_windowoverlap < 0 or $o_windowoverlap >= $o_windowsize or $o_windowminsize <= 0;
 
-my $i = open_possibly_gzipped($o_input_file);
+my $input_fh = open_possibly_gzipped($o_input_file);
 
 my $config = "Starting windowify
 fai file                  : $o_fai_file
@@ -59,8 +73,8 @@ $outconfig =~ s/^/#/mg;
 print STDERR $config;
 print STDOUT $outconfig;
 
-my $l = <$i>;
-while ($l and $l =~ /^#/) { $l = <$i>; }  # skip initial comments
+my $l = <$input_fh>;
+while ($l and $l =~ /^#/) { $l = <$input_fh>; }  # skip initial comments
 chomp $l; # we stopped on the header
 my @header = split /\t/, $l;  # array mapping column to header name
 my %header = map { $header[$_] => $_ } 0..$#header;  # hash mapping name to header column
@@ -74,9 +88,9 @@ sub in_window($$) {
     return 0;
 }
 sub next_window_on_ref($$) {
+    # arg1: reference name   arg2: hash of current window
     # return a hash containing the next window relative to this one, empty if none on this ref
-    # so, does not shift reference sequences
-    # next_window_on_ref($ref
+    # if arg2 undef, then initiate window on reference
     my ($ref, $w) = @_;
     my %n;
     croak "ref empty" if !$ref;
@@ -86,7 +100,12 @@ sub next_window_on_ref($$) {
         $n{ref} = $ref;
         $n{start} = 1;
     } else {  # continue from window in %$w
-        croak "\$ref ($ref) does not match \$w->{ref} ($w->{ref})" if $ref ne $w->{ref};
+        if ($ref ne $w->{ref}) {
+            # the next site (the source of $ref) is beyond the reference sequence of %$w
+            # just return this window and let the control logic advance to the next reference
+            # croak "\$ref ($ref) does not match \$w->{ref} ($w->{ref})";
+            say STDERR "site-based \$ref ($ref) does not match \$w->{ref} ($w->{ref}), returning next window anyway";
+        }
         #say STDERR "next_window_on_ref: next window computed from \%w: ".(%$w ? "ref=$w->{ref} start=$w->{start} end=$w->{end} size=$w->{size}" : "empty");
         $n{ref} = $w->{ref};
         $n{start} = $w->{end} + 1 - $o_windowoverlap;
@@ -188,13 +207,15 @@ sub add_to_window($$) {
 my %wcurr;
 my %wnext;
 my $oldref;
+my $thisref;
 my $out;
 
 say join("\t", @cols);
-while ($l = <$i>) {
+while ($l = <$input_fh>) {
     next if $l =~ /^#/; # skip interstitial comments
     chomp $l;
     my @l = split /\t/, $l;
+    NEWLINE:
     if ($l[$header{Tcov}] < $o_mincov) {
         ++$N_mincov;
         next;
@@ -205,7 +226,21 @@ while ($l = <$i>) {
             %wcurr = next_window_on_ref($l[0], \%wcurr)) {
             #say STDERR "*** advancing over empty window with empty wcurr";
         }
-        last if ! %wcurr;
+        if (! %wcurr) {
+            # we can't get a suitable window for this ref
+            # it could be that we have a ref with a site but the ref is not long enough for a window
+            # if this is the case, we need to advance to the next ref
+            $thisref = $l[0];
+            while ($l[0] eq $thisref) {
+                $l = <$input_fh>;
+                $l = <$input_fh> until $l !~ /^#/; # skip interstitial comments
+                chomp $l;
+                @l = split /\t/, $l;
+            }  # at end of loop, this site is at the next reference but windows are not
+            last if ! $l;
+            goto NEWLINE;
+        }
+        #last if ! %wcurr;
         %wnext = next_window_on_ref($l[0], \%wcurr);
     }
     if (in_window(\@l, \%wnext)) {
@@ -213,6 +248,7 @@ while ($l = <$i>) {
     }
     if (in_window(\@l, \%wcurr)) {
         add_to_window(\@l, \%wcurr);
+        $thisref = $l[0];
     } else {
         # we must advance so that %wcurr is the window in which this site belongs
         # first, finish the current one
@@ -223,6 +259,18 @@ while ($l = <$i>) {
             %wcurr and ! in_window(\@l, \%wcurr);
             %wcurr = next_window_on_ref($l[0], \%wcurr)) {
             #say STDERR "*** advancing over empty window to find site's wcurr";
+        }
+        if (! %wcurr) {
+            # result of ! %wnext, because we could not find another window on this ref
+            # or ! in_window(), because this site is in the next ref and not in the current window
+            # advance sites so we are off this ref.  we lose the current site.
+            while ($l[0] eq $thisref) {
+                $l = <$input_fh>;
+                $l = <$input_fh> until $l !~ /^#/; # skip interstitial comments
+                chomp $l;
+                @l = split /\t/, $l;
+            }  # at end of loop, this site is at the next reference but windows are not
+            goto NEWLINE;
         }
         last if ! %wcurr;
         %wnext = next_window_on_ref($wcurr{ref}, \%wcurr) if %wcurr;
