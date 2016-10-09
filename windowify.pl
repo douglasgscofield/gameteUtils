@@ -135,7 +135,7 @@ sub invalid_site($) {
     return 0;
 }
 
-my @cols = qw/ ref start end size Nval Ninv Nv_1k Ni_1k Tcov Maf_F Maf_U Maf_C Maf_O LRT_FU LRT_UC LRT_CO LRT_Maf_FU LRT_Maf_UC LRT_Maf_CO /;
+my @cols = qw/ ref start end size Nval Ninv Nv_1k Ni_1k Tcov SDcov Maf_F Maf_U Maf_C Maf_O LRT_FU LRT_UC LRT_CO LRT_Maf_FU LRT_Maf_UC LRT_Maf_CO /;
 
 sub finish_window($) {
     my $w = shift;
@@ -151,7 +151,8 @@ sub finish_window($) {
     $w->{Nt_1k} = $w->{Ntot} / ($w->{size} / 1000.0);
     $w->{Nv_1k} = $w->{Nval} / ($w->{size} / 1000.0);
     $w->{Ni_1k} = $w->{Ninv} / ($w->{size} / 1000.0);
-    $w->{Tcov}  /= $w->{Nval};
+    $w->{Tcov} /= $w->{Nval};
+    $w->{SDcov} = sqrt($w->{VM2} / ($w->{Nval} - 1));
     $w->{Maf_F} /= $w->{Nval};
     $w->{Maf_U} /= $w->{Nval};
     $w->{Maf_C} /= $w->{Nval};
@@ -166,7 +167,8 @@ sub finish_window($) {
     $w->{Nt_1k} = rounddot($w->{Nt_1k}, 3);
     $w->{Nv_1k} = rounddot($w->{Nv_1k}, 3);
     $w->{Ni_1k} = rounddot($w->{Ni_1k}, 3);
-    $w->{Tcov}  = rounddot($w->{Tcov}, 1);
+    $w->{Tcov}  = rounddot($w->{Tcov},  2);
+    $w->{SDcov} = rounddot($w->{SDcov}, 2);
     $w->{Maf_F} = rounddot($w->{Maf_F}, 4);
     $w->{Maf_U} = rounddot($w->{Maf_U}, 4);
     $w->{Maf_C} = rounddot($w->{Maf_C}, 4);
@@ -191,6 +193,12 @@ sub add_to_window($$) {
     }
     $w->{Nval}++;  # valid heterozygous sites
     $w->{Tcov}  += $l->[$header{Tcov}];
+    # variance in coverage using Welford's algorithm https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+    $w->{Vmean} = 0 if not exists($w->{Vmean});
+    my $delta = $l->[$header{Tcov}] - $w->{Vmean};
+    $w->{Vmean} += $delta / $w->{Nval};
+    $w->{VM2}   += $delta * ($l->[$header{Tcov}] - $w->{Vmean});;
+    # frequency and likelihood estimators
     $w->{Maf_F} += $l->[$header{Maf_F}];
     $w->{Maf_U} += $l->[$header{Maf_U}];
     $w->{Maf_C} += $l->[$header{Maf_C}];
