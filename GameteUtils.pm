@@ -4,6 +4,7 @@ package GameteUtils;
 
 use strict;
 use warnings;
+use feature 'say';
 use Carp;
 use POSIX;  # nothing exported, use POSIX::log10()
 use FindBin;
@@ -29,7 +30,7 @@ sub combination {
 # package packaging
 
 use Exporter qw/ import /;
-our @EXPORT_OK = qw/ @base_a %base_h log0 choose fill_ref_lengths fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log0dot log10dot do_unselected_test /;
+our @EXPORT_OK = qw/ @base_a %base_h log0 choose fill_ref_lengths fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log0dot log10dot do_twopool_test do_unselected_test /;
 
 
 # package contents
@@ -152,7 +153,7 @@ sub read_hetsites_line($) {
     }
     return () if ! $l;
     chomp $l;
-    #print STDERR "GameteUtils::read_hetsites_line: '$l'\n";
+    #say STDERR "GameteUtils::read_hetsites_line: '$l'";
     my @l = split /\t/, $l;
     if (length($l[3]) > 1 or length($l[4]) > 1) {  # ref or alt not a single base
         ++$main::N_indels;
@@ -160,7 +161,7 @@ sub read_hetsites_line($) {
         if ($main::o_indels) {
             my @i = ("INDEL", @l[(0,1,3,4)]);
             push @i, @l[5,7,8,9] if $main::o_indels_annotate;
-            print { $main::indels } join("\t", @i), "\n";
+            say { $main::indels } join("\t", @i);
         }
         goto READ_LINE;
     }
@@ -182,7 +183,7 @@ sub read_profile_line($$) {
     my $l = <$fh>;
     return () if ! $l;
     chomp $l;
-    #print STDERR "GameteUtils::read_profile_line:$tag: '$l'\n";
+    #say STDERR "GameteUtils::read_profile_line:$tag: '$l'";
     return split /\t/, $l;
 }
 
@@ -384,6 +385,8 @@ sub do_unselected_test {
 #
 # Main script 'our' variables: several others used by called subs
 #     $main::o_selected_prob
+#     $main::o_log10_p
+#     $main::o_check_counts
 sub do_twopool_test($$$$) {
     my ($l1, $l2, $h_ref, $h_alt) = @_;
 
@@ -401,12 +404,15 @@ sub do_twopool_test($$$$) {
     my $result12 = "$utest1[5];$utest2[5]";
 
     # unselected test pool 1 probability; unselected test pool 2 probability;
-    my $prob12 = rounddot($utest1[4]) . ";" . rounddot($utest2[4]);
+    my ($p1, $p2) = ($utest1[4], $utest2[4]);
+    ($p1, $p2) = (log10dot($utest1[4]), log10dot($utest2[4])) if $main::o_log10_p;
+    my $prob12 = rounddot($p1) . ";" . rounddot($p2);
 
     # two selected pools in allele count opposition
     my $counts1 = $d[3]->[0] <=> $d[2]->[0];  # -1 if 3 < 2, 0 if 3 == 3, 1 if 3 > 2
     my $counts2 = $d[3]->[1] <=> $d[2]->[1];
     my $counts = sprintf("%+d;%+d", $counts1, $counts2);
+    my $counts_opposed = ($counts1 and $counts2 and ($counts1 + $counts2 == 0));
 
     # what is going to be the result of this test? check returns of unselected tests
     my $result;
@@ -418,14 +424,14 @@ sub do_twopool_test($$$$) {
         $result = "genotype";
     } elsif ($utest1[5] eq "allele3" or $utest2[5] eq "allele3") {
         $result = "allele3";
-    } elsif (! $counts1 or ! $counts2 or $counts1 + $counts2 != 0) {
+    } elsif ($main::o_check_counts and ! $counts_opposed) {
         $result = "counts";
-    } elsif ($utest1[4] > $main::o_selected_prob or $utest2[4] > $main::o_selected_prob) {
+    } elsif ($counts_opposed and $utest1[4] <= $main::o_selected_prob and $utest2[4] <= $main::o_selected_prob) {
+        $result = "twopool_pass";
+    } else {
         $result = $utest1[4] > $main::o_selected_prob ? "failprob1" : "passprob1";
         $result .= ";";
         $result .= $utest2[4] > $main::o_selected_prob ? "failprob2" : "passprob2";
-    } else {
-        $result = "twopool_pass";
     }
 
     # two selected pools likelihood

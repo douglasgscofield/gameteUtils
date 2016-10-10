@@ -18,12 +18,13 @@
 #
 use strict;
 use warnings;
+use feature 'say';
 use Carp;
 use Getopt::Long;
 use List::Util;
 use FindBin;
 use lib $FindBin::RealBin;  # add script directory to @INC to find BinomialTest and/or GameteUtils
-use GameteUtils qw/ fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log10dot do_unselected_test /;
+use GameteUtils qw/ fill_ref_index open_possibly_gzipped read_hetsites_line read_profile_line sorted_pool_counts rounddot multdot log10dot do_twopool_test do_unselected_test /;
 
 # 'our' variables below are also used within the GameteUtils package
 my $o_fai_file;
@@ -36,9 +37,10 @@ our $o_selected_prob = 0.10;
 our $o_mincov = 8; # 10
 our $o_genotype = 1;  # check for incompatible genotypes?
 our $o_max_allele_3 = 0.1;
+our $o_check_counts = 0;
 my $o_null_fraction = 0.000;
 
-my $o_log10_p = 1;
+our $o_log10_p = 1;
 our $o_sort_bases = 1;
 our $o_hets_genotype = 0;  # GameteUtils::do_unselected_test() results do not include genotype columns
 my $o_allsites = 1;
@@ -67,6 +69,7 @@ my $usage_short = "
         --null-fraction FLOAT    [default $o_null_fraction]
         --mincov INT             [default $o_mincov]
         --max-allele-3 FLOAT     [default $o_max_allele_3]
+        --check-counts           [default $o_check_counts]
         --log10-p                [default $o_log10_p]
         --indels                 [default $o_indels]
         --no-indels
@@ -95,7 +98,6 @@ OPTIONS
                   sequences in the VCF and profile files
 
     --hetsites FILE
-
                   VCF-format file specifying heterozygous sites. Use care in
                   producing this file; for simplicity, this script only uses
                   presence-absence positional information from the file to
@@ -113,7 +115,6 @@ OPTIONS
     --unselected FILE   Profile base content for 'unselected' pool
  
     --unselected-test FLOAT
-
                   Test for deviation of 'unselected' pool allele frequency away
                   from 1:1, using a two-sided binomial test with expected
                   frequency 0.5.  This is applied to the pool specified with
@@ -132,7 +133,6 @@ OPTIONS
     --selected-2 FILE   Profile base content for selected pool 2
 
     --selected-test FLOAT
-
                   Test for deviation of 'selected' pool allele frequencies away
                   from 1:1, using a two-sided binomial test with expected
                   frequency 0.5.  This is applied to each of the selected pools
@@ -143,9 +143,7 @@ OPTIONS
                   disposition, and is prefixed with 'het_' for each site that
                   is a called heterozygote.  [default $o_selected_prob]
 
-
     --null-fraction FLOAT
-
                   For fraction FLOAT sites that are *not* called heterozygotes,
                   perform the unselected and selected tests as above.  Output
                   This fraction is also subject to the --mincov and
@@ -158,9 +156,13 @@ OPTIONS
                   the unselected and selected pools [default $o_mincov].
 
     --max-allele-3 FLOAT
-
                   Maximum accepted frequency count for a 3rd allele, applied to
                   each of the unselected and selected pools [default $o_max_allele_3]
+
+    --check-counts  Report 'counts' if selected pools do not have opposed allele
+                    counts (are not +1/-1 or -1/+1); otherwise the selected test
+                    results ({fail,pass}prob{1,2}) are reported [default $o_check_counts]
+                  
 
   OTHER OPTIONS
 
@@ -234,7 +236,7 @@ via --null-fraction.  For those named similarly to those above, the meaning is s
 sub print_usage_and_exit {
     my $x = shift;
     my $msg = join(" ", @_);
-    print "$msg\n" if $msg;
+    say "$msg" if $msg;
     print $usage;
     $x ||= 0;
     exit $x;
@@ -256,6 +258,7 @@ GetOptions(
     "null-fraction=f"     => \$o_null_fraction,
     "mincov=i"            => \$o_mincov,
     "max-allele-3=f"      => \$o_max_allele_3,
+    "check-counts"        => \$o_check_counts,
     "log10-p"             => \$o_log10_p,
     "indels"              => \$o_indels,
     "no-indels"           => sub { $o_indels = 0 },
@@ -278,14 +281,14 @@ $o_indels ||= $o_indels_annotate;
 
 # fill reference sequence order hash from fai file
 my %REF_ORDER = fill_ref_index($o_fai_file);
-print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_file\n";
+say STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_file";
 
 my $h = open_possibly_gzipped($o_hetsites_file);
 
 if ($o_indels) {
     $o_indels = $o_hetsites_file . "_twoPool_indels.txt";
     if (! open ($indels, ">", $o_indels)) {
-        print STDERR "cannot open indels output file '$o_indels', disabling option\n"; 
+        say STDERR "cannot open indels output file '$o_indels', disabling option"; 
         $o_indels = 0;
         $o_indels_annotate = 0;
     }
@@ -340,17 +343,16 @@ null-fraction             : $o_null_fraction
 
 mincov                    : $o_mincov
 max-allele-3              : $o_max_allele_3
-
+check-counts              : $o_check_counts
 log10-p                   : $o_log10_p
 allsites                  : $o_allsites
 indels                    : $o_indels
 sort-bases                : $o_sort_bases
-
 ";
 my $outconfig = $config;
 $outconfig =~ s/^/#/mg;
-print STDERR $config;
-print STDOUT $outconfig;
+say STDERR $config;
+say STDOUT $outconfig;
 
 my @h = read_hetsites_line($h);  # CHROM POS REF ALT
 my @p = read_unselected_line();  # CHROM POS A C G T N
@@ -363,8 +365,28 @@ sub print_result($) {  # do rounding, etc. for output
     $r->[4] = rounddot($r->[4]);
     $r->[13] = log10dot($r->[13]) if $o_log10_p;
     $r->[13] = rounddot($r->[13]);
-    print STDOUT join("\t", @$r), "\n";
+    say STDOUT join("\t", @$r);
 }
+
+# header
+#
+#            "ref", #  1 reference
+#            "pos", #  2 position
+#            "ucov", #  3 read coverage in unselected pool
+#            "udesc", #  4 test description string, unselected pool
+#            "uprob", #  5 unselected probability
+#            "ures", #  6 unselected test result string
+#            "s1cov", #  7 read coverage in selected 1 pool
+#            "s2cov", #  8 read coverage in selected 2 pool
+#            "sudesc", #  9 test description strings from selected 1 and 2 pools
+#            "sures", # 10 unselected test results from selected 1 and 2 pools
+#            "suprob", # 11 probabilities from selected 1 and 2 pools
+#            "counts", # 12 -1/0/+1 comparisons of allele counts from selected pools
+#            "spres", # 13 twopool test result string
+#            "spprob" # 14 twopool test multiplied probability
+#
+# 1:chr1	2:14166	3:32	4:binom,G/T:5/27	5:0.00006	6:het_binom_fail	7:75	8:26	9:hetTwoPool;binom,G/T:11/64;binom,G/T:5/21	10:binom_fail;binom_fail	11:0.0000000;0.0012470	12:-1;-1	13:het_counts	14:-12.7126239
+say join("\t", "ref", "pos", "ucov", "udesc", "uprob", "ures", "s1cov", "s2cov", "sudesc", "sures", "suprob", "counts", "spres", "spprob");
 
 while (@h and @p and @s1 and @s2) {
     if ($h[0] eq $p[0] and $h[0] eq $s1[0] and $h[0] eq $s2[0]) { # same reference
@@ -382,7 +404,7 @@ while (@h and @p and @s1 and @s2) {
             # prefix the test states with "het_" to show this was a called het site
             $result[5] = "het_$result[5]";
             $result[12] = "het_$result[12]";
-            #print STDOUT join("\t", @result), "\n";
+            #say STDOUT join("\t", @result);
             print_result(\@result);
         } elsif ($h[1] < $p[1]) {
             @h = read_hetsites_line($h); # advance hetsites file
@@ -430,7 +452,7 @@ while (@h and @p and @s1 and @s2) {
             my @result = do_combined_test(\@p, \@s1, \@s2, undef, undef);
             $result[5] = "null_$result[5]";
             $result[12] = "null_$result[12]";
-            #print STDOUT join("\t", @result), "\n";
+            #say STDOUT join("\t", @result);
             print_result(\@result);
         }
         @p = read_unselected_line(); # advance pools because wrong ref sequence
@@ -442,7 +464,7 @@ while (@h and @p and @s1 and @s2) {
 }
 
 
-print STDERR "Skipped $N_indels indels\n";
+say STDERR "Skipped $N_indels indels";
 
-print STDERR "Finished hetTwoPool test\n";
+say STDERR "Finished hetTwoPool test";
 

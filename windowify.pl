@@ -23,13 +23,15 @@ my $N_minsites = 0;
 my $N_zerosites = 0;
 my $o_fai_file;
 my $o_input_file;
+my $o_twopool_file;
 
-my $usage = "$0 [options] --fai fasta.fa.fai --input FILE
+my $usage = "$0 [options] --fai fasta.fa.fai --input FILE [ --twopool FILE ]
 
 OPTIONS:
 
     --fai FILE        Fasta index file (samtools faidx FASTA.fa) [default $o_fai_file]
     --input FILE      hetPoolLikelihoods.pl output file [default $o_input_file]
+    --twopool FILE    hetTwoPoolTest.pl output file [default $o_twopool_file]
     --size INT        Window size in bp [default $o_windowsize]
     --overlap INT     Window overlap in bp [default $o_windowoverlap]
     --minsize INT     Minimum window size [default $o_windowminsize]
@@ -41,6 +43,7 @@ OPTIONS:
 GetOptions(
     "fai=s"         => \$o_fai_file,
     "input=s"       => \$o_input_file,
+    "twopool=s"     => \$o_twopool_file,
     "size=i"        => \$o_windowsize,
     "overlap=i"     => \$o_windowoverlap,
     "minsize=i"     => \$o_windowminsize,
@@ -49,6 +52,8 @@ GetOptions(
     "minsites=i"    => \$o_minsites,
 ) or do { say STDERR $usage; exit(1); };
 
+croak $usage if ! $o_fai_file or ! $o_input_file;
+
 # fill reference sequence order hash from fai file
 my %REF_LENGTHS = fill_ref_lengths($o_fai_file);
 say STDERR "Found ".scalar(keys(%REF_LENGTHS))." reference sequences in $o_fai_file";
@@ -56,10 +61,12 @@ say STDERR "Found ".scalar(keys(%REF_LENGTHS))." reference sequences in $o_fai_f
 croak "Please use sensible window and overlap sizes" if $o_windowoverlap < 0 or $o_windowoverlap >= $o_windowsize or $o_windowminsize <= 0;
 
 my $input_fh = open_possibly_gzipped($o_input_file);
+my $twopool_fh; $twopool_fh = open_possibly_gzipped($o_twopool_file) if $o_twopool_file;
 
 my $config = "Starting windowify
 fai file                  : $o_fai_file
 input                     : $o_input_file
+twopool                   : $o_twopool_file
 window size               : $o_windowsize
 window overlap            : $o_windowoverlap
 window min size           : $o_windowminsize
@@ -78,6 +85,17 @@ while ($l and $l =~ /^#/) { $l = <$input_fh>; }  # skip initial comments
 chomp $l; # we stopped on the header
 my @header = split /\t/, $l;  # array mapping column to header name
 my %header = map { $header[$_] => $_ } 0..$#header;  # hash mapping name to header column
+
+my $tpl;
+my @tpheader; 
+my %tpheader; 
+if ($twopool_fh) {
+    $tpl = <$twopool_fh>;
+    while ($tpl and $tpl =~ /^#/) { $tpl = <$twopool_fh>; }  # skip initial comments
+    chomp $tpl; # we stopped on the twopool header
+    @tpheader = split /\t/, $tpl;  # array mapping column to header name
+    %tpheader = map { $tpheader[$_] => $_ } 0..$#tpheader;  # hash mapping name to header column
+}
 
 my $N_windows = 0;
 
