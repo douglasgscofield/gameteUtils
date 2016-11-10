@@ -248,7 +248,7 @@ print STDERR "Found ".scalar(keys(%REF_ORDER))." reference sequences in $o_fai_f
 my $h = open_possibly_gzipped($o_hetsites_file);
 
 if ($o_indels) {
-    $o_indels = $o_hetsites_file . "_twoPool_indels.txt";
+    $o_indels = $o_hetsites_file . "_hetPool_indels.txt";
     if (! open ($indels, ">", $o_indels)) {
         print STDERR "cannot open indels output file '$o_indels', disabling option\n"; 
         $o_indels = 0;
@@ -359,7 +359,7 @@ while (@h and @f and @u and @c and @o) {
                 goto READ_NEXT_SITE;
             }
 
-            if ($n_all_Total > $o_maxcov) {  # ignore this site, coverage too high
+            if ($o_maxcov and $n_all_Total > $o_maxcov) {  # ignore this site, coverage too high
                 ++$N_maxcov;
                 goto READ_NEXT_SITE;
             }
