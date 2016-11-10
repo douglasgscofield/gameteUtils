@@ -222,7 +222,7 @@ print_usage_and_exit(1) if $o_help
                           or not $o_outer_file
                           or $o_ploidy <= 0
                           or $o_poolsize <= 0
-                          or $o_maxcov <= 0
+                          or $o_maxcov < 0
                           or $o_max_sites < 0;
 if (not defined($o_maxcov) or ! $o_maxcov) {
     print STDERR "No sensible --maxcov value provided.  Consider these, based on chr1:
