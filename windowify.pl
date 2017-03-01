@@ -25,6 +25,8 @@ my $o_fai_file = "";
 my $o_input_file = "";
 my $o_twopool_file = "";
 my $N_twopool_sites = 0;
+my $o_debug = 0;
+my $o_verbose = 0;
 
 GetOptions(
     "fai=s"         => \$o_fai_file,
@@ -36,6 +38,8 @@ GetOptions(
     "max-windows=i" => \$o_max_windows,
     "mincov=i"      => \$o_mincov,
     "minsites=i"    => \$o_minsites,
+    "verbose+"      => \$o_verbose,
+    "debug+"        => \$o_debug,
 ) or do { exit(1); };
 
 my $usage = "$0 [options] --fai fasta.fa.fai --input FILE [ --twopool FILE ]
@@ -117,7 +121,8 @@ sub next_window_on_ref($$) {
     croak "ref empty" if !$ref;
     croak "this-window hash ref empty" if defined($w) and !%$w;
     if (not defined($w)) { # start first window
-        #say STDERR "next_window_on_ref: initiating first window on ref $ref";
+        say STDERR "next_window_on_ref: initiating first window on ref $ref" if $o_debug > 0;
+        say STDERR "Reference sequence $ref" if $o_verbose > 0;
         $n{ref} = $ref;
         $n{start} = 1;
     } else {  # continue from window in %$w
@@ -125,18 +130,18 @@ sub next_window_on_ref($$) {
             # the next site (the source of $ref) is beyond the reference sequence of %$w
             # just return this window and let the control logic advance to the next reference
             # croak "\$ref ($ref) does not match \$w->{ref} ($w->{ref})";
-            say STDERR "site-based \$ref ($ref) does not match \$w->{ref} ($w->{ref}), returning next window anyway";
+            say STDERR "site-based \$ref ($ref) does not match \$w->{ref} ($w->{ref}), returning next window anyway" if $o_debug > 0;
         }
-        #say STDERR "next_window_on_ref: next window computed from \%w: ".(%$w ? "ref=$w->{ref} start=$w->{start} end=$w->{end} size=$w->{size}" : "empty");
+        say STDERR "next_window_on_ref: next window computed from \%w: ".(%$w ? "ref=$w->{ref} start=$w->{start} end=$w->{end} size=$w->{size}" : "empty") if $o_debug > 0;
         $n{ref} = $w->{ref};
-        $n{start} = $w->{end} + 1 - $o_windowoverlap;
+        $n{start} = $w->{start} + $o_windowsize - $o_windowoverlap;
     }
     $n{end} = List::Util::min($n{start} + $o_windowsize - 1, $REF_LENGTHS{$n{ref}});
     $n{size} = $n{end} - $n{start} + 1;
     if ($n{start} > $REF_LENGTHS{$n{ref}} or $n{size} < $o_windowminsize) {
         %n = ();
     }
-    #say STDERR "next_window_on_ref: *** new window \%n: ".(%n ? "ref=$n{ref} start=$n{start} end=$n{end} size=$n{size}" : "empty");
+    say STDERR "next_window_on_ref: return \%n: ".(%n ? "ref=$n{ref} start=$n{start} end=$n{end} size=$n{size}" : "empty") if $o_debug > 0;
     return wantarray ? %n : \%n;
 }
 

@@ -93,7 +93,7 @@ my $usage_short = "
         --ploidy INT             [default $o_ploidy]
         --pool-size INT          [default $o_poolsize, maximum ".MAX_POOLSIZE."]
         --maxcov FLOAT           [no default, use the following]
-             male 31: 2*246.938 = 493.876
+             male 31: 2*263.255 = 526.510
              male 32: 2*266.425 = 532.850
              male 34: 2*277.560 = 555.120
         --mincov INT             [default $o_mincov]
@@ -224,10 +224,11 @@ print_usage_and_exit(1) if $o_help
                           or $o_poolsize <= 0
                           or $o_maxcov < 0
                           or $o_max_sites < 0;
-if (not defined($o_maxcov) or ! $o_maxcov) {
+#if (not defined($o_maxcov) or ! $o_maxcov) {
+if (not defined($o_maxcov)) {
     print STDERR "No sensible --maxcov value provided.  Consider these, based on chr1:
 
-    male 31: 2*246.938 = 493.876
+    male 31: 2*263.255 = 526.510
     male 32: 2*266.425 = 532.850
     male 34: 2*277.560 = 555.120
 ";
